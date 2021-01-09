@@ -1,7 +1,7 @@
 use std::ops::Deref;
 
 #[derive(Debug, PartialEq)]
-pub struct Payload(Vec<u8>);
+pub struct Payload(pub Vec<u8>);
 
 impl Deref for Payload {
     type Target = Vec<u8>;
@@ -18,6 +18,30 @@ impl From<Payload> for Vec<u8> {
         return bs;
     }
 }
+
+#[derive(Debug, PartialEq)]
+pub struct Message(Vec<u8>);
+
+impl From<Payload> for Message {
+    fn from(p: Payload) -> Message {
+        assert!(p.len() <= (u8::MAX as usize));
+        let bs: Vec<u8> = vec![0xFF, 0xFE, (p.len() as u8)]
+            .into_iter()
+            .chain(Vec::from(p).into_iter())
+            .collect();
+        return Message(bs);
+    }
+}
+
+impl Deref for Message {
+    type Target = Vec<u8>;
+
+    fn deref(&self) -> &Vec<u8> {
+        let Message(bs) = self;
+        return bs;
+    }
+}
+
 
 #[derive(Debug, PartialEq)]
 pub struct Request {
@@ -53,7 +77,7 @@ pub enum Toggle {
     Off,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Distance {
     Feet(u16),
 }
@@ -65,7 +89,7 @@ impl Distance {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Concentration {
     PPM(u16),
 }
@@ -373,13 +397,39 @@ pub mod response {
     use chrono;
     use std::convert::{TryFrom, TryInto};
     use std::result;
+    use std::string;
 
     #[derive(Debug, PartialEq)]
     pub struct ParseError(String);
 
-    impl<T: ToString> From<T> for ParseError {
-        fn from(v: T) -> ParseError {
-            ParseError(v.to_string())
+    impl ToString for ParseError {
+        fn to_string(&self) -> String {
+            let ParseError(s) = self;
+            return s.clone();
+        }
+    }
+
+    impl From<String> for ParseError {
+        fn from(s: String) -> ParseError {
+            ParseError(s)
+        }
+    }
+
+    impl From<&str> for ParseError {
+        fn from(s: &str) -> ParseError {
+            ParseError(s.to_string())
+        }
+    }
+
+    impl From<chrono::ParseError> for ParseError {
+        fn from(p: chrono::ParseError) -> ParseError {
+            ParseError(format!("chrono parse error: {}", p))
+        }
+    }
+
+    impl From<string::FromUtf8Error> for ParseError {
+        fn from(f: string::FromUtf8Error) -> ParseError {
+            ParseError(format!("utf8 decode error: {}", f))
         }
     }
 
@@ -400,6 +450,13 @@ pub mod response {
 
     #[derive(Debug, PartialEq)]
     pub struct GasPPM(Concentration);
+
+    impl GasPPM {
+        pub fn concentration(&self) -> Concentration {
+            let GasPPM(c) = self;
+            return *c;
+        }
+    }
 
     impl TryFrom<Payload> for GasPPM {
         type Error = ParseError;
@@ -531,7 +588,6 @@ pub mod response {
             if p.len() != 1 {
                 return Err(ParseError::from("ABC state should be a single byte"));
             }
-            let code: u8 = p[0];
             match p[0] {
                 0x1 => Ok(ABCState::On),
                 0x2 => Ok(ABCState::Off),

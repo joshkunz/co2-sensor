@@ -8,6 +8,10 @@ edition = "2018"
 
 [dependencies]
 
+[dependencies.serialport]
+version = "4"
+default-features = false
+
 [dependencies.chrono]
 version = "0.4"
 # Disable the "oldtime" feature, which will be deprecated in the future.
