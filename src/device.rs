@@ -4,6 +4,7 @@ use std::io::{Read, Write};
 use serialport;
 use crate::wire;
 use std::time;
+use std::thread;
 
 #[derive(Debug, PartialEq)]
 pub struct Error(String);
@@ -27,7 +28,7 @@ impl T6615 {
                 .parity(serialport::Parity::None)
                 .data_bits(serialport::DataBits::Eight)
                 .stop_bits(serialport::StopBits::One)
-                .timeout(time::Duration::from_secs(5))
+                .timeout(time::Duration::from_secs(1))
         )?;
 
         return Ok(T6615{
@@ -35,28 +36,25 @@ impl T6615 {
         });
     }
 
-    pub fn send<T: Into<wire::Payload>>(&mut self, v: T) -> Result<()> {
-        let p: wire::Payload = v.into();
-        if p.len() > u8::MAX.into() {
+    pub fn execute_once<S, T, E>(&mut self, s: S) -> Result<T>
+    where
+        S: Into<wire::Payload>,
+        T: TryFrom<wire::Payload, Error=E>,
+        E: ToString
+    {
+        let out_p: wire::Payload = s.into();
+        if out_p.len() > u8::MAX.into() {
             return Err(Error::from("payload too long"));
         }
-        let msg: Vec<u8> = vec![0xFF, 0xFE, p.len() as u8].into_iter()
-            .chain(Vec::from(p).into_iter())
+        let msg: Vec<u8> = vec![0xFF, 0xFE, out_p.len() as u8].into_iter()
+            .chain(Vec::from(out_p).into_iter())
             .collect();
+        println!("SEN: {:?}", &msg);
         self.port.write_all(&msg)?;
-        return Ok(());
-    }
 
-    pub fn recv<E, T>(&mut self) -> Result<T> 
-    where
-        E: ToString,
-        T: TryFrom<wire::Payload, Error=E>
-    {
-        // We can only represent messages up to size 256 + 4, so use a buffer of
-        // size 300 (nice round number with some buffer).
-        let mut raw: [u8; 300] = [0; 300];
-        let _size = self.port.read(&mut raw)?;
-        let hdr = &raw[0..3];
+        let mut hdr: [u8; 3] = Default::default();
+        self.port.read_exact(&mut hdr)?;
+        println!("HDR: {:?}", hdr);
         if hdr[0] != 0xFF {
             return Err(Error::from(
                 format!("incorrect Tsunami flag: {:#X}", hdr[0])));
@@ -66,9 +64,34 @@ impl T6615 {
                 format!("incorrect Tsunami address: {:#X}", hdr[1])));
         }
         let length: usize = hdr[2] as usize;
-        // 4, because 4 is the first byte after the header. Then +length
-        // to grab the size of the payload.
-        let p = wire::Payload(raw[4..(4 + length)].into());
-        return Ok(T::try_from(p)?);
+        let mut body: Vec<u8> = Vec::with_capacity(length);
+        // Though body has 'length' capacity, it is still "empty", so it
+        // is coereced to an empty slice. Here we reserve 'length'
+        // bytes so it will have non-zero size.
+        body.resize(length, 0);
+        self.port.read_exact(&mut body)?;
+        println!("BDY: {:?}", body);
+        return Ok(T::try_from(wire::Payload(body))?);
+    }
+
+    pub fn execute<S, T, E>(&mut self, s: S) -> Result<T> 
+    where
+        S: Into<wire::Payload> + Clone,
+        T: TryFrom<wire::Payload, Error=E>,
+        E: ToString
+    {
+        let tries = 10;
+        // Rust cannot deduce that last_err would be assigned
+        // by the time this is used, so we set a dummy error
+        // to make the compiler happy.
+        let mut last_err: Error = Error::from("this should not be returned");
+        for _ in 0..tries {
+            match self.execute_once(s.clone()) {
+                Ok(v) => return Ok(v),
+                Err(e) => last_err = e,
+            }
+            thread::sleep(time::Duration::from_secs(1));
+        }
+        return Err(last_err);
     }
 }
