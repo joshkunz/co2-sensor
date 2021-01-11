@@ -15,9 +15,12 @@ fn main() {
     let mut dev = device::T6615::new(&args[1]).unwrap();
 
     let stat: response::Status = dev.execute(command::Status).unwrap();
-    println!("in error: {}, in warmup: {}", stat.is_err(), stat.in_warmup());
+    println!(
+        "in error: {}, in warmup: {}",
+        stat.is_err(),
+        stat.in_warmup()
+    );
 
-    let got: response::GasPPM = dev.execute(
-        command::Read(wire::Variable::GasPPM)).unwrap();
+    let got: response::GasPPM = dev.execute(command::Read(wire::Variable::GasPPM)).unwrap();
     println!("got PPM: {}", got.concentration().ppm());
 }

@@ -42,7 +42,6 @@ impl Deref for Message {
     }
 }
 
-
 #[derive(Debug, PartialEq)]
 pub struct Request {
     flag: u8,
