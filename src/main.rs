@@ -18,7 +18,7 @@ async fn serve_metrics() {
         return String::from_utf8(out).unwrap();
     });
 
-    let addr: net::IpAddr = "127.0.0.1".parse().unwrap();
+    let addr: net::IpAddr = "0.0.0.0".parse().unwrap();
     warp::serve(routes).run((addr, 8000)).await;
 }
 

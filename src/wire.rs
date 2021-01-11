@@ -42,7 +42,6 @@ impl Deref for Message {
     }
 }
 
-
 #[derive(Debug, PartialEq)]
 pub struct Request {
     flag: u8,
@@ -50,7 +49,7 @@ pub struct Request {
     payload: Payload,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Variable {
     GasPPM,
     SerialNumber,
@@ -71,7 +70,7 @@ impl From<Variable> for u8 {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Toggle {
     On,
     Off,
@@ -104,7 +103,7 @@ impl Concentration {
 pub mod command {
     use super::*;
 
-    #[derive(Debug, PartialEq)]
+    #[derive(Debug, PartialEq, Clone)]
     pub struct Read(pub Variable);
 
     impl From<Read> for Payload {
@@ -114,7 +113,7 @@ pub mod command {
         }
     }
 
-    #[derive(Debug, PartialEq)]
+    #[derive(Debug, PartialEq, Clone)]
     pub struct UpdateElevation(pub Distance);
 
     impl From<UpdateElevation> for Payload {
@@ -125,7 +124,7 @@ pub mod command {
         }
     }
 
-    #[derive(Debug, PartialEq)]
+    #[derive(Debug, PartialEq, Clone)]
     pub struct Warmup;
 
     impl From<Warmup> for Payload {
@@ -134,7 +133,7 @@ pub mod command {
         }
     }
 
-    #[derive(Debug, PartialEq)]
+    #[derive(Debug, PartialEq, Clone)]
     pub struct StartSinglePointCalibration;
 
     impl From<StartSinglePointCalibration> for Payload {
@@ -143,7 +142,7 @@ pub mod command {
         }
     }
 
-    #[derive(Debug, PartialEq)]
+    #[derive(Debug, PartialEq, Clone)]
     pub struct VerifySinglePointCalibration;
 
     impl From<VerifySinglePointCalibration> for Payload {
@@ -152,7 +151,7 @@ pub mod command {
         }
     }
 
-    #[derive(Debug, PartialEq)]
+    #[derive(Debug, PartialEq, Clone)]
     pub struct SetSinglePointPPM(pub Concentration);
 
     impl From<SetSinglePointPPM> for Payload {
@@ -163,7 +162,7 @@ pub mod command {
         }
     }
 
-    #[derive(Debug, PartialEq)]
+    #[derive(Debug, PartialEq, Clone)]
     pub struct Status;
 
     impl From<Status> for Payload {
@@ -172,7 +171,7 @@ pub mod command {
         }
     }
 
-    #[derive(Debug, PartialEq)]
+    #[derive(Debug, PartialEq, Clone)]
     pub struct Idle(pub Toggle);
 
     impl From<Idle> for Payload {
@@ -184,7 +183,7 @@ pub mod command {
         }
     }
 
-    #[derive(Debug, PartialEq)]
+    #[derive(Debug, PartialEq, Clone)]
     pub struct ABCLogic;
 
     impl From<ABCLogic> for Payload {
@@ -193,7 +192,7 @@ pub mod command {
         }
     }
 
-    #[derive(Debug, PartialEq)]
+    #[derive(Debug, PartialEq, Clone)]
     pub struct SetABCLogic(pub Toggle);
 
     impl From<SetABCLogic> for Payload {
@@ -205,7 +204,7 @@ pub mod command {
         }
     }
 
-    #[derive(Debug, PartialEq)]
+    #[derive(Debug, PartialEq, Clone)]
     pub struct ResetABCLogic;
 
     impl From<ResetABCLogic> for Payload {
@@ -214,7 +213,7 @@ pub mod command {
         }
     }
 
-    #[derive(Debug, PartialEq)]
+    #[derive(Debug, PartialEq, Clone)]
     pub struct Halt;
 
     impl From<Halt> for Payload {
@@ -223,7 +222,7 @@ pub mod command {
         }
     }
 
-    #[derive(Debug, PartialEq)]
+    #[derive(Debug, PartialEq, Clone)]
     pub struct Loopback(pub Vec<u8>);
 
     impl From<Loopback> for Payload {
@@ -235,7 +234,7 @@ pub mod command {
         }
     }
 
-    #[derive(Debug, PartialEq)]
+    #[derive(Debug, PartialEq, Clone)]
     pub struct StartSelfTest;
 
     impl From<StartSelfTest> for Payload {
@@ -244,7 +243,7 @@ pub mod command {
         }
     }
 
-    #[derive(Debug, PartialEq)]
+    #[derive(Debug, PartialEq, Clone)]
     pub struct SelfTestResults;
 
     impl From<SelfTestResults> for Payload {
@@ -253,7 +252,7 @@ pub mod command {
         }
     }
 
-    #[derive(Debug, PartialEq)]
+    #[derive(Debug, PartialEq, Clone)]
     pub struct StreamData;
 
     impl From<StreamData> for Payload {
