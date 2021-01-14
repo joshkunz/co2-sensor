@@ -46,8 +46,32 @@ impl From<wire::response::ParseError> for Error {
     }
 }
 
+/// Result is the common result type used in this module.
 pub type Result<T> = result::Result<T, Error>;
 
+/// Device represents a device that can execute commands. This is useful
+/// for testing purposes.
+pub trait Device {
+    fn execute<S, T, E>(&mut self, s: S) -> Result<T>
+    where
+        S: Into<wire::Payload>,
+        E: ToString,
+        T: TryFrom<wire::Payload, Error = E>;
+
+    fn read_co2(&mut self) -> Result<wire::Concentration> {
+        let r: wire::response::GasPPM = self.execute(
+            wire::command::Read(wire::Variable::GasPPM))?;
+        return Ok(r.concentration());
+    }
+
+    fn read_elevation(&mut self) -> Result<wire::Distance> {
+        let wire::response::Elevation(d) = self.execute(
+            wire::command::Read(wire::Variable::Elevation))?;
+        return Ok(d);
+    }
+}
+
+/// T6615 implements the `Device` trait for the Telaire T6615 CO2 module.
 pub struct T6615 {
     port: serialport::TTYPort,
 }
@@ -64,24 +88,16 @@ impl T6615 {
 
         return Ok(T6615 { port: port });
     }
+}
 
-    pub fn execute<S, T, E>(&mut self, s: S) -> Result<T>
+impl Device for T6615 {
+    fn execute<S, T, E>(&mut self, s: S) -> Result<T>
     where
         S: Into<wire::Payload>,
         E: ToString,
         T: TryFrom<wire::Payload, Error = E>,
     {
-        // Convert the command into the wire message format.
-        let out_p: wire::Payload = s.into();
-        if out_p.len() > u8::MAX.into() {
-            return Err(Error::from("payload too long"));
-        }
-        // Construct the message with the flag/address/length header.
-        let msg: Vec<u8> = vec![0xFF, 0xFE, out_p.len() as u8]
-            .into_iter()
-            .chain(Vec::from(out_p).into_iter())
-            .collect();
-        // Send the message.
+        let msg = wire::Message::from(s.into());
         self.port.write_all(&msg)?;
 
         // Read out the reply header.
@@ -111,5 +127,84 @@ impl T6615 {
 
         // And unmarshal the reply body into a reply type.
         return Ok(T::try_from(wire::Payload(body)).map_err(|e| e.to_string())?);
+    }
+}
+
+#[cfg(test)]
+mod fake {
+    use super::*;
+
+    /// Fake implements the `Device` trait, but is not backed by a physical
+    /// device. It can be used for testing.
+    struct Fake {
+        gas: wire::Concentration,
+        elevation: wire::Distance,
+    }
+
+    impl Default for Fake {
+        fn default() -> Self {
+            return Fake{
+                gas: wire::Concentration::PPM(0),
+                elevation: wire::Distance::Feet(0),
+            };
+        }
+    }
+
+    impl Fake {
+        fn with_gas(ppm: u16) -> Fake {
+            let mut f: Fake = Default::default();
+            f.gas = wire::Concentration::PPM(ppm);
+            return f;
+        }
+
+        fn with_elevation(feet: u16) -> Fake {
+            let mut f: Fake = Default::default();
+            f.elevation = wire::Distance::Feet(feet);
+            return f;
+        }
+    }
+
+    impl Device for Fake {
+        fn execute<S, T, E>(&mut self, s: S) -> Result<T>
+        where
+            S: Into<wire::Payload>,
+            E: ToString,
+            T: TryFrom<wire::Payload, Error = E>
+        {
+            let p: wire::Payload = s.into();
+            let mut r: wire::Payload = Default::default();
+            if p == wire::Payload::from(wire::command::Read(wire::Variable::GasPPM)) {
+                r = wire::response::GasPPM::with_ppm(self.gas.ppm()).into();
+            } else if p == wire::Payload::from(wire::command::Read(wire::Variable::Elevation)) {
+                r = wire::response::Elevation(self.elevation).into();
+            } else {
+                return Err(Error::from("not implemented"));
+            }
+            return T::try_from(r).map_err(|e| Error::from(e.to_string()));
+        }
+    }
+
+    #[test]
+    fn test_read_co2() {
+        assert_eq!(
+            Fake::with_gas(1200).read_co2(),
+            Ok(wire::Concentration::PPM(1200)),
+        );
+        assert_eq!(
+            Fake::with_gas(0).read_co2(),
+            Ok(wire::Concentration::PPM(0)),
+        );
+    }
+
+    #[test]
+    fn test_read_elevation() {
+        assert_eq!(
+            Fake::with_elevation(500).read_elevation(),
+            Ok(wire::Distance::Feet(500)),
+        );
+        assert_eq!(
+            Fake::with_elevation(0).read_elevation(),
+            Ok(wire::Distance::Feet(0)),
+        );
     }
 }

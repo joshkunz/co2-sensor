@@ -19,6 +19,12 @@ impl From<Payload> for Vec<u8> {
     }
 }
 
+impl Default for Payload {
+    fn default() -> Payload {
+        Payload(Vec::new())
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub struct Message(Vec<u8>);
 
@@ -451,6 +457,10 @@ pub mod response {
     pub struct GasPPM(Concentration);
 
     impl GasPPM {
+        pub fn with_ppm(p: u16) -> GasPPM {
+            GasPPM(Concentration::PPM(p))
+        }
+
         pub fn concentration(&self) -> Concentration {
             let GasPPM(c) = self;
             return *c;
@@ -466,6 +476,13 @@ pub mod response {
             let raw: [u8; 2] = Vec::from(p).try_into().expect("as per assertion");
             let value = u16::from_be_bytes(raw);
             return Ok(GasPPM(Concentration::PPM(value)));
+        }
+    }
+
+    impl From<GasPPM> for Payload {
+        fn from(g: GasPPM) -> Payload {
+            let bytes: [u8; 2] = g.concentration().ppm().to_be_bytes();
+            return Payload(Vec::from(bytes));
         }
     }
 
@@ -527,6 +544,14 @@ pub mod response {
             // Should always succeed due to preceeding length check.
             let num = u16::from_be_bytes(Vec::from(p).try_into().unwrap());
             return Ok(Elevation(Distance::Feet(num)));
+        }
+    }
+
+    impl From<Elevation> for Payload {
+        fn from(e: Elevation) -> Payload {
+            let Elevation(d) = e;
+            let bytes: [u8; 2] = d.feet().to_be_bytes();
+            return Payload(Vec::from(bytes));
         }
     }
 

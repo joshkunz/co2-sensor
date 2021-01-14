@@ -8,6 +8,7 @@ use std::env;
 use std::process;
 mod device;
 mod wire;
+use device::Device;
 use std::thread;
 use std::time;
 
@@ -41,10 +42,8 @@ async fn measure(mut sensor: device::T6615) {
         every.tick().await;
 
         println!("Measuring...");
-        let m: device::Result<wire::response::GasPPM> = sensor.execute(
-            wire::command::Read(wire::Variable::GasPPM));
-        match m {
-            Ok(v) => gague.set(v.concentration().ppm() as f64),
+        match sensor.read_co2() {
+            Ok(c) => gague.set(c.ppm() as f64),
             Err(e) => eprintln!("Error reading value: {}", e.to_string()),
         }
     }
