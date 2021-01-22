@@ -59,15 +59,25 @@ pub trait Device {
         T: TryFrom<wire::Payload, Error = E>;
 
     fn read_co2(&mut self) -> Result<wire::Concentration> {
-        let r: wire::response::GasPPM = self.execute(
-            wire::command::Read(wire::Variable::GasPPM))?;
+        let r: wire::response::GasPPM =
+            self.execute(wire::command::Read(wire::Variable::GasPPM))?;
         return Ok(r.concentration());
     }
 
     fn read_elevation(&mut self) -> Result<wire::Distance> {
-        let wire::response::Elevation(d) = self.execute(
-            wire::command::Read(wire::Variable::Elevation))?;
+        let wire::response::Elevation(d) =
+            self.execute(wire::command::Read(wire::Variable::Elevation))?;
         return Ok(d);
+    }
+
+    fn wait_warmup<T: Fn(time::Duration)>(&mut self, sleep_fn: T) -> Result<()> {
+        loop {
+            let r: wire::response::Status = self.execute(wire::command::Status)?;
+            if !r.in_warmup() {
+                return Ok(());
+            }
+            sleep_fn(time::Duration::from_secs(5));
+        }
     }
 }
 
@@ -134,18 +144,27 @@ impl Device for T6615 {
 mod fake {
     use super::*;
 
+    use std::sync;
+    use std::sync::atomic;
+    use std::sync::mpsc;
+    use std::thread;
+
     /// Fake implements the `Device` trait, but is not backed by a physical
     /// device. It can be used for testing.
     struct Fake {
         gas: wire::Concentration,
         elevation: wire::Distance,
+        in_warmup: sync::Arc<atomic::AtomicBool>,
+        status_notify: Option<mpsc::Sender<()>>,
     }
 
     impl Default for Fake {
         fn default() -> Self {
-            return Fake{
+            return Fake {
                 gas: wire::Concentration::PPM(0),
                 elevation: wire::Distance::Feet(0),
+                in_warmup: sync::Arc::new(atomic::AtomicBool::new(false)),
+                status_notify: None,
             };
         }
     }
@@ -162,6 +181,12 @@ mod fake {
             f.elevation = wire::Distance::Feet(feet);
             return f;
         }
+
+        fn with_status_notify(s: mpsc::Sender<()>) -> Fake {
+            let mut f: Fake = Default::default();
+            f.status_notify = Some(s);
+            return f;
+        }
     }
 
     impl Device for Fake {
@@ -169,7 +194,7 @@ mod fake {
         where
             S: Into<wire::Payload>,
             E: ToString,
-            T: TryFrom<wire::Payload, Error = E>
+            T: TryFrom<wire::Payload, Error = E>,
         {
             let p: wire::Payload = s.into();
             let mut r: wire::Payload = Default::default();
@@ -177,8 +202,19 @@ mod fake {
                 r = wire::response::GasPPM::with_ppm(self.gas.ppm()).into();
             } else if p == wire::Payload::from(wire::command::Read(wire::Variable::Elevation)) {
                 r = wire::response::Elevation(self.elevation).into();
+            } else if p == wire::Payload::from(wire::command::Status) {
+                // XXX: Only in warmup is currently implemented.
+                let b: u8 = if self.in_warmup.load(atomic::Ordering::SeqCst) {
+                    0b10 // "in warmup" is the second bit.
+                } else {
+                    0b0
+                };
+                r = wire::Payload(vec![b]);
+                if let Some(notify) = &self.status_notify {
+                    let _r = notify.send(());
+                }
             } else {
-                return Err(Error::from("not implemented"));
+                return Err(Error::from(format!("not implemented: {:?}", p)));
             }
             return T::try_from(r).map_err(|e| Error::from(e.to_string()));
         }
@@ -206,5 +242,54 @@ mod fake {
             Fake::with_elevation(0).read_elevation(),
             Ok(wire::Distance::Feet(0)),
         );
+    }
+
+    #[test]
+    fn test_wait_warmup() {
+        // in_warm_status is the warmup status of the fake.
+        let in_warm_status: sync::Arc<atomic::AtomicBool> = atomic::AtomicBool::new(true).into();
+
+        // status_called signals when the "status" command has been
+        // sent to the fake.
+        let (status_send, status_called) = mpsc::channel();
+
+        // Create a new fake with our status notify channel + set our
+        // warm status value as the warm parameter.
+        let mut f = Fake::with_status_notify(status_send);
+        f.in_warmup = in_warm_status.clone();
+
+        let (warmup_done_send, warmup_done_recv) = mpsc::channel();
+
+        // Start polling for warmup in a new thread, and capture the
+        // warmup status.
+        thread::spawn(move || {
+            warmup_done_send
+                .send(f.wait_warmup(|_d| {
+                    thread::sleep(time::Duration::from_millis(100));
+                }))
+                .unwrap();
+        });
+
+        // In a separate thread, we wait for the loop to poll the status
+        // at least once, and then mark the status as "warm".
+        {
+            let in_warm_status = in_warm_status.clone();
+            thread::spawn(move || {
+                status_called.recv().unwrap();
+                in_warm_status.store(false, atomic::Ordering::SeqCst);
+            });
+        }
+
+        assert_eq!(
+            warmup_done_recv
+                .recv_timeout(time::Duration::from_secs(5))
+                .map_err(|_| "warmup timed out after 5s")
+                .unwrap()
+                .unwrap(),
+            (),
+        );
+        // Make sure that status was called at least once, so the fake was
+        // warmed up.
+        assert!(!in_warm_status.load(atomic::Ordering::SeqCst));
     }
 }
