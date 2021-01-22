@@ -10,7 +10,6 @@ mod device;
 mod wire;
 use device::Device;
 use std::thread;
-use std::time;
 
 async fn serve_metrics(addr: &str) {
     let reg = prometheus::default_registry();

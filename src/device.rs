@@ -40,14 +40,24 @@ impl From<io::Error> for Error {
     }
 }
 
-impl From<wire::response::ParseError> for Error {
-    fn from(e: wire::response::ParseError) -> Error {
+impl From<wire::ParseError> for Error {
+    fn from(e: wire::ParseError) -> Error {
         Error(e.to_string())
     }
 }
 
 /// Result is the common result type used in this module.
 pub type Result<T> = result::Result<T, Error>;
+
+fn round(v: u16, nearest: u16) -> u16 {
+    let mid = nearest / 2;
+    let diff = v % nearest;
+    let lower = v - diff;
+    if diff < mid {
+        return lower;
+    }
+    return lower + nearest;
+}
 
 /// Device represents a device that can execute commands. This is useful
 /// for testing purposes.
@@ -58,18 +68,30 @@ pub trait Device {
         E: ToString,
         T: TryFrom<wire::Payload, Error = E>;
 
+    /// Read a co2 measurement from the sensor.
     fn read_co2(&mut self) -> Result<wire::Concentration> {
         let r: wire::response::GasPPM =
             self.execute(wire::command::Read(wire::Variable::GasPPM))?;
         return Ok(r.concentration());
     }
 
+    /// Read the configured elevation from the sensor.
     fn read_elevation(&mut self) -> Result<wire::Distance> {
         let wire::response::Elevation(d) =
             self.execute(wire::command::Read(wire::Variable::Elevation))?;
         return Ok(d);
     }
 
+    /// Configure the device to operate at elevation `d`. May be rounded to
+    /// nearest 500 feet.
+    fn set_elevation(&mut self, d: wire::Distance) -> Result<()> {
+        let e = wire::Distance::Feet(round(d.feet(), 500));
+        let wire::response::Ack = self.execute(wire::command::UpdateElevation(e))?;
+        return Ok(());
+    }
+
+    /// Wait for the device to finish warmup. Should be called before
+    /// taking co2 measurements. `sleep_fn` is called between polling cycles.
     fn wait_warmup<T: Fn(time::Duration)>(&mut self, sleep_fn: T) -> Result<()> {
         loop {
             let r: wire::response::Status = self.execute(wire::command::Status)?;
@@ -197,7 +219,7 @@ mod fake {
             T: TryFrom<wire::Payload, Error = E>,
         {
             let p: wire::Payload = s.into();
-            let mut r: wire::Payload = Default::default();
+            let r: wire::Payload;
             if p == wire::Payload::from(wire::command::Read(wire::Variable::GasPPM)) {
                 r = wire::response::GasPPM::with_ppm(self.gas.ppm()).into();
             } else if p == wire::Payload::from(wire::command::Read(wire::Variable::Elevation)) {
@@ -213,6 +235,10 @@ mod fake {
                 if let Some(notify) = &self.status_notify {
                     let _r = notify.send(());
                 }
+            } else if let Ok(u) = wire::command::UpdateElevation::try_from(p.clone()) {
+                let wire::command::UpdateElevation(d) = u;
+                self.elevation = d;
+                r = wire::Payload::from(wire::response::Ack);
             } else {
                 return Err(Error::from(format!("not implemented: {:?}", p)));
             }
@@ -247,7 +273,7 @@ mod fake {
     #[test]
     fn test_wait_warmup() {
         // in_warm_status is the warmup status of the fake.
-        let in_warm_status: sync::Arc<atomic::AtomicBool> = atomic::AtomicBool::new(true).into();
+        let in_warm_status: sync::Arc<_> = atomic::AtomicBool::new(true).into();
 
         // status_called signals when the "status" command has been
         // sent to the fake.
@@ -291,5 +317,19 @@ mod fake {
         // Make sure that status was called at least once, so the fake was
         // warmed up.
         assert!(!in_warm_status.load(atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_set_elevation() {
+        let mut f = Fake::default();
+
+        f.set_elevation(wire::Distance::Feet(1500)).unwrap();
+        assert_eq!(f.read_elevation(), Ok(wire::Distance::Feet(1500)));
+
+        f.set_elevation(wire::Distance::Feet(923)).unwrap();
+        assert_eq!(f.read_elevation(), Ok(wire::Distance::Feet(1000)));
+
+        f.set_elevation(wire::Distance::Feet(2270)).unwrap();
+        assert_eq!(f.read_elevation(), Ok(wire::Distance::Feet(2500)));
     }
 }

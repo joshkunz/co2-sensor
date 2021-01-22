@@ -1,6 +1,9 @@
+use std::convert::{TryFrom, TryInto};
 use std::ops::Deref;
+use std::result;
+use std::string;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Payload(pub Vec<u8>);
 
 impl Deref for Payload {
@@ -106,6 +109,42 @@ impl Concentration {
     }
 }
 
+#[derive(Debug, PartialEq)]
+pub struct ParseError(String);
+
+impl ToString for ParseError {
+    fn to_string(&self) -> String {
+        let ParseError(s) = self;
+        return s.clone();
+    }
+}
+
+impl From<String> for ParseError {
+    fn from(s: String) -> ParseError {
+        ParseError(s)
+    }
+}
+
+impl From<&str> for ParseError {
+    fn from(s: &str) -> ParseError {
+        ParseError(s.to_string())
+    }
+}
+
+impl From<chrono::ParseError> for ParseError {
+    fn from(p: chrono::ParseError) -> ParseError {
+        ParseError(format!("chrono parse error: {}", p))
+    }
+}
+
+impl From<string::FromUtf8Error> for ParseError {
+    fn from(f: string::FromUtf8Error) -> ParseError {
+        ParseError(format!("utf8 decode error: {}", f))
+    }
+}
+
+type Result<T> = result::Result<T, ParseError>;
+
 pub mod command {
     use super::*;
 
@@ -127,6 +166,23 @@ pub mod command {
             let UpdateElevation(d) = u;
             let bytes: [u8; 2] = d.feet().to_be_bytes();
             Payload(vec![0x03, 0x0F, bytes[0], bytes[1]])
+        }
+    }
+
+    impl TryFrom<Payload> for UpdateElevation {
+        type Error = ParseError;
+
+        fn try_from(p: Payload) -> Result<UpdateElevation> {
+            if !p.starts_with(&vec![0x03, 0x0F]) {
+                return Err(ParseError::from(
+                    "invalid command code for update elevation",
+                ));
+            }
+            let raw: [u8; 2] = Vec::from(&p[2..])
+                .try_into()
+                .expect("should have two bytes");
+            let value = u16::from_be_bytes(raw);
+            return Ok(UpdateElevation(Distance::Feet(value)));
         }
     }
 
@@ -400,45 +456,6 @@ pub mod command {
 pub mod response {
     use super::*;
     use chrono;
-    use std::convert::{TryFrom, TryInto};
-    use std::result;
-    use std::string;
-
-    #[derive(Debug, PartialEq)]
-    pub struct ParseError(String);
-
-    impl ToString for ParseError {
-        fn to_string(&self) -> String {
-            let ParseError(s) = self;
-            return s.clone();
-        }
-    }
-
-    impl From<String> for ParseError {
-        fn from(s: String) -> ParseError {
-            ParseError(s)
-        }
-    }
-
-    impl From<&str> for ParseError {
-        fn from(s: &str) -> ParseError {
-            ParseError(s.to_string())
-        }
-    }
-
-    impl From<chrono::ParseError> for ParseError {
-        fn from(p: chrono::ParseError) -> ParseError {
-            ParseError(format!("chrono parse error: {}", p))
-        }
-    }
-
-    impl From<string::FromUtf8Error> for ParseError {
-        fn from(f: string::FromUtf8Error) -> ParseError {
-            ParseError(format!("utf8 decode error: {}", f))
-        }
-    }
-
-    type Result<T> = result::Result<T, ParseError>;
 
     #[derive(Debug, PartialEq)]
     pub struct Ack;
@@ -450,6 +467,12 @@ pub mod response {
                 return Err(ParseError::from("payload not empty"));
             }
             return Ok(Ack);
+        }
+    }
+
+    impl From<Ack> for Payload {
+        fn from(_a: Ack) -> Payload {
+            Payload::default()
         }
     }
 
