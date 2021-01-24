@@ -68,6 +68,14 @@ pub trait Device {
         E: ToString,
         T: TryFrom<wire::Payload, Error = E>;
 
+    /// A special case of `execute`. Assumes that the given command receives
+    /// an ACK reply. Since ACK's don't contain any interesting information,
+    /// no result is returned.
+    fn execute_ack<S: Into<wire::Payload>>(&mut self, s: S) -> Result<()> {
+        let _ack: wire::response::Ack = self.execute(s)?;
+        return Ok(());
+    }
+
     /// Read a co2 measurement from the sensor.
     fn read_co2(&mut self) -> Result<wire::Concentration> {
         let r: wire::response::GasPPM =
@@ -90,16 +98,54 @@ pub trait Device {
         return Ok(());
     }
 
-    /// Wait for the device to finish warmup. Should be called before
-    /// taking co2 measurements. `sleep_fn` is called between polling cycles.
-    fn wait_warmup<T: Fn(time::Duration)>(&mut self, sleep_fn: T) -> Result<()> {
+    /// Wait for the device to enter a particular status. This function will
+    /// continuously poll the device until the given predicate function
+    /// (which accepts a status) returns true.
+    fn wait_status<P, T>(&mut self, pred: P, sleep_fn: T) -> Result<()>
+    where
+        P: Fn(wire::response::Status) -> bool,
+        T: Fn(time::Duration),
+    {
         loop {
             let r: wire::response::Status = self.execute(wire::command::Status)?;
-            if !r.in_warmup() {
+            if pred(r) {
                 return Ok(());
             }
             sleep_fn(time::Duration::from_secs(5));
         }
+    }
+
+    /// Wait for the device to finish warmup. Should be called before
+    /// taking co2 measurements. `sleep_fn` is called between polling cycles.
+    fn wait_warmup<T: Fn(time::Duration)>(&mut self, sleep_fn: T) -> Result<()> {
+        return self.wait_status(|s| !s.in_warmup(), sleep_fn);
+    }
+
+    /// Calibrate the device's co2 readings to a reference concentration.
+    /// This function is very heavyweight, it may take a minute or longer.
+    fn calibrate_co2<T: Fn(time::Duration)>(
+        &mut self,
+        reference: wire::Concentration,
+        sleep_fn: T,
+    ) -> Result<()> {
+        self.execute_ack(wire::command::StartSinglePointCalibration)?;
+        // Wait at least one DSP before checking that we've entered calibration
+        // mode.
+        sleep_fn(time::Duration::from_secs(30));
+        // Wait for the device to enter calibration mode.
+        self.wait_status(|s| s.in_calibration(), &sleep_fn)?;
+        self.execute_ack(wire::command::SetSinglePointPPM(reference))?;
+        let got: wire::response::GasPPM =
+            self.execute(wire::command::VerifySinglePointCalibration)?;
+        if reference != got.concentration() {
+            return Err(Error::from(format!(
+                "failed to verify single point calibration, got {:?} expected {:?}",
+                got, reference
+            )));
+        }
+        // Wait for the device to exit calibration mode.
+        self.wait_status(|s| !s.in_calibration(), &sleep_fn)?;
+        return Ok(());
     }
 }
 
@@ -109,6 +155,7 @@ pub struct T6615 {
 }
 
 impl T6615 {
+    /// Construct a new T6615 instance from a TTY path.
     pub fn new(path: &str) -> Result<T6615> {
         let port = serialport::TTYPort::open(
             &serialport::new(path, 19200)
@@ -178,6 +225,8 @@ mod fake {
         elevation: wire::Distance,
         in_warmup: sync::Arc<atomic::AtomicBool>,
         status_notify: Option<mpsc::Sender<()>>,
+        reference: wire::Concentration,
+        in_calibration: bool,
     }
 
     impl Default for Fake {
@@ -187,6 +236,8 @@ mod fake {
                 elevation: wire::Distance::Feet(0),
                 in_warmup: sync::Arc::new(atomic::AtomicBool::new(false)),
                 status_notify: None,
+                reference: wire::Concentration::PPM(0),
+                in_calibration: false,
             };
         }
     }
@@ -225,13 +276,10 @@ mod fake {
             } else if p == wire::Payload::from(wire::command::Read(wire::Variable::Elevation)) {
                 r = wire::response::Elevation(self.elevation).into();
             } else if p == wire::Payload::from(wire::command::Status) {
-                // XXX: Only in warmup is currently implemented.
-                let b: u8 = if self.in_warmup.load(atomic::Ordering::SeqCst) {
-                    0b10 // "in warmup" is the second bit.
-                } else {
-                    0b0
-                };
-                r = wire::Payload(vec![b]);
+                let mut flags = wire::response::StatusFlags::default();
+                flags.in_warmup = self.in_warmup.load(atomic::Ordering::SeqCst);
+                flags.in_calibration = self.in_calibration;
+                r = wire::response::Status::from(flags).into();
                 if let Some(notify) = &self.status_notify {
                     let _r = notify.send(());
                 }
@@ -239,8 +287,18 @@ mod fake {
                 let wire::command::UpdateElevation(d) = u;
                 self.elevation = d;
                 r = wire::Payload::from(wire::response::Ack);
+            } else if p == wire::Payload::from(wire::command::StartSinglePointCalibration) {
+                self.in_calibration = true;
+                r = wire::Payload::from(wire::response::Ack);
+            } else if let Ok(ssp) = wire::command::SetSinglePointPPM::try_from(p.clone()) {
+                let wire::command::SetSinglePointPPM(c) = ssp;
+                self.reference = c;
+                r = wire::response::Ack.into();
+            } else if let Ok(_) = wire::command::VerifySinglePointCalibration::try_from(p.clone()) {
+                self.in_calibration = false;
+                r = wire::response::GasPPM::with_ppm(self.reference.ppm()).into();
             } else {
-                return Err(Error::from(format!("not implemented: {:?}", p)));
+                return Err(Error::from(format!("fake not implemented: {:?}", p)));
             }
             return T::try_from(r).map_err(|e| Error::from(e.to_string()));
         }
@@ -331,5 +389,29 @@ mod fake {
 
         f.set_elevation(wire::Distance::Feet(2270)).unwrap();
         assert_eq!(f.read_elevation(), Ok(wire::Distance::Feet(2500)));
+    }
+
+    #[test]
+    fn test_calibrate_co2() {
+        let mut f = Fake::default();
+
+        assert_eq!(f.reference, wire::Concentration::PPM(0));
+
+        let (calibrated_tx, calibrated_rx) = mpsc::channel();
+
+        thread::spawn(move || {
+            f.calibrate_co2(wire::Concentration::PPM(400), |_d| {})
+                .unwrap();
+            calibrated_tx.send(f).unwrap();
+        });
+
+        assert_eq!(
+            calibrated_rx
+                .recv_timeout(time::Duration::from_secs(5))
+                .map_err(|_| "warmup timed out")
+                .unwrap()
+                .reference,
+            wire::Concentration::PPM(400),
+        );
     }
 }

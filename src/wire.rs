@@ -1,3 +1,4 @@
+use std::array;
 use std::convert::{TryFrom, TryInto};
 use std::ops::Deref;
 use std::result;
@@ -143,6 +144,12 @@ impl From<string::FromUtf8Error> for ParseError {
     }
 }
 
+impl From<array::TryFromSliceError> for ParseError {
+    fn from(t: array::TryFromSliceError) -> ParseError {
+        ParseError(format!("cannot corce slice to array: {}", t))
+    }
+}
+
 type Result<T> = result::Result<T, ParseError>;
 
 pub mod command {
@@ -213,6 +220,19 @@ pub mod command {
         }
     }
 
+    impl TryFrom<Payload> for VerifySinglePointCalibration {
+        type Error = ParseError;
+
+        fn try_from(p: Payload) -> Result<VerifySinglePointCalibration> {
+            if Vec::from(p) != vec![0x02, 0x11] {
+                return Err(ParseError::from(
+                    "wrong command bytes for verify single point calibration",
+                ));
+            }
+            return Ok(VerifySinglePointCalibration);
+        }
+    }
+
     #[derive(Debug, PartialEq, Clone)]
     pub struct SetSinglePointPPM(pub Concentration);
 
@@ -221,6 +241,17 @@ pub mod command {
             let SetSinglePointPPM(c) = s;
             let bytes: [u8; 2] = c.ppm().to_be_bytes();
             Payload(vec![0x03, 0x11, bytes[0], bytes[1]])
+        }
+    }
+
+    impl TryFrom<Payload> for SetSinglePointPPM {
+        type Error = ParseError;
+        fn try_from(p: Payload) -> Result<SetSinglePointPPM> {
+            if !p.starts_with(&vec![0x03, 0x11]) {
+                return Err(ParseError::from("incorrect command bytes"));
+            }
+            let value = u16::from_be_bytes(p[2..].try_into()?);
+            return Ok(SetSinglePointPPM(Concentration::PPM(value)));
         }
     }
 
@@ -619,6 +650,51 @@ pub mod response {
                 return Err(ParseError::from("status should be a single byte"));
             }
             return Ok(Status { v: p[0] });
+        }
+    }
+
+    impl From<Status> for Payload {
+        fn from(s: Status) -> Payload {
+            return Payload(vec![s.v]);
+        }
+    }
+
+    #[derive(Debug, PartialEq)]
+    pub struct StatusFlags {
+        pub in_err: bool,
+        pub in_warmup: bool,
+        pub in_calibration: bool,
+        pub in_idle: bool,
+        pub in_self_test: bool,
+    }
+
+    impl Default for StatusFlags {
+        fn default() -> StatusFlags {
+            return StatusFlags {
+                in_err: false,
+                in_warmup: false,
+                in_calibration: false,
+                in_idle: false,
+                in_self_test: false,
+            };
+        }
+    }
+
+    fn set_bit_at(v: bool, idx: u8) -> u8 {
+        if !v {
+            return 0b0;
+        }
+        return 1 << idx;
+    }
+
+    impl From<StatusFlags> for Status {
+        fn from(sf: StatusFlags) -> Status {
+            let status_byte = set_bit_at(sf.in_err, 0)
+                | set_bit_at(sf.in_warmup, 1)
+                | set_bit_at(sf.in_calibration, 2)
+                | set_bit_at(sf.in_idle, 3)
+                | set_bit_at(sf.in_self_test, 7);
+            return Status { v: status_byte };
         }
     }
 
