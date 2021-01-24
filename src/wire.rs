@@ -621,24 +621,34 @@ pub mod response {
     }
 
     impl Status {
+        /// Returns `true` if the device reported an error status.
         pub fn is_err(&self) -> bool {
             bit_at(self.v, 0)
         }
 
+        /// Returns `true` if the device reported being in a warmup state.
         pub fn in_warmup(&self) -> bool {
             bit_at(self.v, 1)
         }
 
+        /// Returns `true` if the device reported being in a calibration state.
         pub fn in_calibration(&self) -> bool {
             bit_at(self.v, 2)
         }
 
+        /// Returns `true` if the device reported being in an idle state.
         pub fn in_idle(&self) -> bool {
             bit_at(self.v, 3)
         }
 
+        /// Returns `true` if the device is executing a self test.
         pub fn in_self_test(&self) -> bool {
             bit_at(self.v, 7)
+        }
+
+        /// Returns `true` if the device is in a normal state of operation.
+        pub fn is_normal(&self) -> bool {
+            return self.v == 0;
         }
     }
 
