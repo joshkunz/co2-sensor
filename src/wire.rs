@@ -1,6 +1,10 @@
+use std::array;
+use std::convert::{TryFrom, TryInto};
 use std::ops::Deref;
+use std::result;
+use std::string;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Payload(pub Vec<u8>);
 
 impl Deref for Payload {
@@ -16,6 +20,12 @@ impl From<Payload> for Vec<u8> {
     fn from(p: Payload) -> Vec<u8> {
         let Payload(bs) = p;
         return bs;
+    }
+}
+
+impl Default for Payload {
+    fn default() -> Payload {
+        Payload(Vec::new())
     }
 }
 
@@ -100,6 +110,48 @@ impl Concentration {
     }
 }
 
+#[derive(Debug, PartialEq)]
+pub struct ParseError(String);
+
+impl ToString for ParseError {
+    fn to_string(&self) -> String {
+        let ParseError(s) = self;
+        return s.clone();
+    }
+}
+
+impl From<String> for ParseError {
+    fn from(s: String) -> ParseError {
+        ParseError(s)
+    }
+}
+
+impl From<&str> for ParseError {
+    fn from(s: &str) -> ParseError {
+        ParseError(s.to_string())
+    }
+}
+
+impl From<chrono::ParseError> for ParseError {
+    fn from(p: chrono::ParseError) -> ParseError {
+        ParseError(format!("chrono parse error: {}", p))
+    }
+}
+
+impl From<string::FromUtf8Error> for ParseError {
+    fn from(f: string::FromUtf8Error) -> ParseError {
+        ParseError(format!("utf8 decode error: {}", f))
+    }
+}
+
+impl From<array::TryFromSliceError> for ParseError {
+    fn from(t: array::TryFromSliceError) -> ParseError {
+        ParseError(format!("cannot corce slice to array: {}", t))
+    }
+}
+
+type Result<T> = result::Result<T, ParseError>;
+
 pub mod command {
     use super::*;
 
@@ -121,6 +173,23 @@ pub mod command {
             let UpdateElevation(d) = u;
             let bytes: [u8; 2] = d.feet().to_be_bytes();
             Payload(vec![0x03, 0x0F, bytes[0], bytes[1]])
+        }
+    }
+
+    impl TryFrom<Payload> for UpdateElevation {
+        type Error = ParseError;
+
+        fn try_from(p: Payload) -> Result<UpdateElevation> {
+            if !p.starts_with(&vec![0x03, 0x0F]) {
+                return Err(ParseError::from(
+                    "invalid command code for update elevation",
+                ));
+            }
+            let raw: [u8; 2] = Vec::from(&p[2..])
+                .try_into()
+                .expect("should have two bytes");
+            let value = u16::from_be_bytes(raw);
+            return Ok(UpdateElevation(Distance::Feet(value)));
         }
     }
 
@@ -151,6 +220,19 @@ pub mod command {
         }
     }
 
+    impl TryFrom<Payload> for VerifySinglePointCalibration {
+        type Error = ParseError;
+
+        fn try_from(p: Payload) -> Result<VerifySinglePointCalibration> {
+            if Vec::from(p) != vec![0x02, 0x11] {
+                return Err(ParseError::from(
+                    "wrong command bytes for verify single point calibration",
+                ));
+            }
+            return Ok(VerifySinglePointCalibration);
+        }
+    }
+
     #[derive(Debug, PartialEq, Clone)]
     pub struct SetSinglePointPPM(pub Concentration);
 
@@ -159,6 +241,17 @@ pub mod command {
             let SetSinglePointPPM(c) = s;
             let bytes: [u8; 2] = c.ppm().to_be_bytes();
             Payload(vec![0x03, 0x11, bytes[0], bytes[1]])
+        }
+    }
+
+    impl TryFrom<Payload> for SetSinglePointPPM {
+        type Error = ParseError;
+        fn try_from(p: Payload) -> Result<SetSinglePointPPM> {
+            if !p.starts_with(&vec![0x03, 0x11]) {
+                return Err(ParseError::from("incorrect command bytes"));
+            }
+            let value = u16::from_be_bytes(p[2..].try_into()?);
+            return Ok(SetSinglePointPPM(Concentration::PPM(value)));
         }
     }
 
@@ -394,45 +487,6 @@ pub mod command {
 pub mod response {
     use super::*;
     use chrono;
-    use std::convert::{TryFrom, TryInto};
-    use std::result;
-    use std::string;
-
-    #[derive(Debug, PartialEq)]
-    pub struct ParseError(String);
-
-    impl ToString for ParseError {
-        fn to_string(&self) -> String {
-            let ParseError(s) = self;
-            return s.clone();
-        }
-    }
-
-    impl From<String> for ParseError {
-        fn from(s: String) -> ParseError {
-            ParseError(s)
-        }
-    }
-
-    impl From<&str> for ParseError {
-        fn from(s: &str) -> ParseError {
-            ParseError(s.to_string())
-        }
-    }
-
-    impl From<chrono::ParseError> for ParseError {
-        fn from(p: chrono::ParseError) -> ParseError {
-            ParseError(format!("chrono parse error: {}", p))
-        }
-    }
-
-    impl From<string::FromUtf8Error> for ParseError {
-        fn from(f: string::FromUtf8Error) -> ParseError {
-            ParseError(format!("utf8 decode error: {}", f))
-        }
-    }
-
-    type Result<T> = result::Result<T, ParseError>;
 
     #[derive(Debug, PartialEq)]
     pub struct Ack;
@@ -447,10 +501,20 @@ pub mod response {
         }
     }
 
+    impl From<Ack> for Payload {
+        fn from(_a: Ack) -> Payload {
+            Payload::default()
+        }
+    }
+
     #[derive(Debug, PartialEq)]
     pub struct GasPPM(Concentration);
 
     impl GasPPM {
+        pub fn with_ppm(p: u16) -> GasPPM {
+            GasPPM(Concentration::PPM(p))
+        }
+
         pub fn concentration(&self) -> Concentration {
             let GasPPM(c) = self;
             return *c;
@@ -466,6 +530,13 @@ pub mod response {
             let raw: [u8; 2] = Vec::from(p).try_into().expect("as per assertion");
             let value = u16::from_be_bytes(raw);
             return Ok(GasPPM(Concentration::PPM(value)));
+        }
+    }
+
+    impl From<GasPPM> for Payload {
+        fn from(g: GasPPM) -> Payload {
+            let bytes: [u8; 2] = g.concentration().ppm().to_be_bytes();
+            return Payload(Vec::from(bytes));
         }
     }
 
@@ -530,6 +601,14 @@ pub mod response {
         }
     }
 
+    impl From<Elevation> for Payload {
+        fn from(e: Elevation) -> Payload {
+            let Elevation(d) = e;
+            let bytes: [u8; 2] = d.feet().to_be_bytes();
+            return Payload(Vec::from(bytes));
+        }
+    }
+
     #[derive(Debug, PartialEq)]
     pub struct Status {
         v: u8,
@@ -542,24 +621,34 @@ pub mod response {
     }
 
     impl Status {
+        /// Returns `true` if the device reported an error status.
         pub fn is_err(&self) -> bool {
             bit_at(self.v, 0)
         }
 
+        /// Returns `true` if the device reported being in a warmup state.
         pub fn in_warmup(&self) -> bool {
             bit_at(self.v, 1)
         }
 
+        /// Returns `true` if the device reported being in a calibration state.
         pub fn in_calibration(&self) -> bool {
             bit_at(self.v, 2)
         }
 
+        /// Returns `true` if the device reported being in an idle state.
         pub fn in_idle(&self) -> bool {
             bit_at(self.v, 3)
         }
 
+        /// Returns `true` if the device is executing a self test.
         pub fn in_self_test(&self) -> bool {
             bit_at(self.v, 7)
+        }
+
+        /// Returns `true` if the device is in a normal state of operation.
+        pub fn is_normal(&self) -> bool {
+            return self.v == 0;
         }
     }
 
@@ -571,6 +660,51 @@ pub mod response {
                 return Err(ParseError::from("status should be a single byte"));
             }
             return Ok(Status { v: p[0] });
+        }
+    }
+
+    impl From<Status> for Payload {
+        fn from(s: Status) -> Payload {
+            return Payload(vec![s.v]);
+        }
+    }
+
+    #[derive(Debug, PartialEq)]
+    pub struct StatusFlags {
+        pub in_err: bool,
+        pub in_warmup: bool,
+        pub in_calibration: bool,
+        pub in_idle: bool,
+        pub in_self_test: bool,
+    }
+
+    impl Default for StatusFlags {
+        fn default() -> StatusFlags {
+            return StatusFlags {
+                in_err: false,
+                in_warmup: false,
+                in_calibration: false,
+                in_idle: false,
+                in_self_test: false,
+            };
+        }
+    }
+
+    fn set_bit_at(v: bool, idx: u8) -> u8 {
+        if !v {
+            return 0b0;
+        }
+        return 1 << idx;
+    }
+
+    impl From<StatusFlags> for Status {
+        fn from(sf: StatusFlags) -> Status {
+            let status_byte = set_bit_at(sf.in_err, 0)
+                | set_bit_at(sf.in_warmup, 1)
+                | set_bit_at(sf.in_calibration, 2)
+                | set_bit_at(sf.in_idle, 3)
+                | set_bit_at(sf.in_self_test, 7);
+            return Status { v: status_byte };
         }
     }
 
