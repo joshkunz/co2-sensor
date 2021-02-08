@@ -1,0 +1,26 @@
+.co2_box {
+    font-size: 25pt;
+    width: 15rem;
+}
+
+.co2_measurement {
+    margin-left: 0.7ex;
+}
+
+.co2_units {
+    font-size: 50%;
+    font-weight: bold;
+    font-family: monospace;
+}
+
+.metrics_url_label {
+    margin-right: 1ex;
+    font-style: italic;
+}
+
+.status-icon {
+    margin-right: 1ex;
+    vertical-align: middle;
+    display: inline-block;
+    margin-bottom: 2.5pt;
+}
