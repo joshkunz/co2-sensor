@@ -1,5 +1,7 @@
 # co2-sensor
 
+![Test](https://github.com/joshkunz/co2-sensor/workflows/Test/badge.svg)
+
 This repository contains the code for a simple CO2 sensor that exports
 metrics using the [prometheus](https://prometheus.io/) monitoring format, and
 potentially others in the future.

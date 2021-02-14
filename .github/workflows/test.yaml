@@ -1,0 +1,38 @@
+name: Test
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+jobs:
+  test-backend:
+    name: Backend 
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v2
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+      - name: Build
+        run: cargo build
+      - name: Test
+        run: cargo test
+  test-frontend:
+    name: Frontend 
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend 
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-node@v2
+      - name: Install
+        run: yarn --frozen-lockfile install
+      - name: Test
+        run: yarn test
