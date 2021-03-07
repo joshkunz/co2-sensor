@@ -20,7 +20,7 @@ const AMBIENT_CONCENTRATION: wire::Concentration = wire::Concentration::PPM(410)
 const MAX_MEASURE_RATE: time::Duration = time::Duration::from_secs(15);
 
 #[derive(Debug)]
-struct Error(String);
+pub struct Error(String);
 
 impl From<&str> for Error {
     fn from(e: &str) -> Error {
@@ -48,7 +48,7 @@ impl From<sync::mpsc::RecvError> for Error {
 
 type Result<T> = result::Result<T, Error>;
 
-trait Device {
+pub trait Device {
     fn read_co2(&mut self) -> Result<wire::Concentration>;
     fn calibrate_co2<T: Fn(time::Duration)>(
         &mut self,
@@ -71,7 +71,7 @@ impl<D: device::Device> Device for D {
     }
 }
 
-trait Manager {
+pub trait Manager {
     fn measure(&self) -> Result<wire::Concentration>;
     fn calibrate(&self) -> ();
     fn is_ready(&self) -> bool;
@@ -80,7 +80,7 @@ trait Manager {
 type RateLimiter<C> =
     governor::RateLimiter<governor::state::direct::NotKeyed, governor::state::InMemoryState, C>;
 
-struct DeviceManager<D, C: governor::clock::Clock> {
+pub struct DeviceManager<D, C: governor::clock::Clock> {
     device: sync::Arc<sync::Mutex<D>>,
     limiter: sync::Arc<RateLimiter<C>>,
     last_measure: sync::Arc<sync::Mutex<Option<wire::Concentration>>>,
@@ -170,7 +170,7 @@ where
     }
 }
 
-struct Server<M> {
+pub struct Server<M> {
     registry: sync::Arc<prometheus::Registry>,
     manager: M,
     co2_metric: prometheus::Gauge,
@@ -187,7 +187,7 @@ impl<M: Manager + Clone> Clone for Server<M> {
 }
 
 impl<M> Server<M> {
-    fn new(manager: M) -> Self {
+    pub fn new(manager: M) -> Self {
         let registry = prometheus::Registry::new();
         // TODO(jkz): These errors should be propogated probably.
         let co2_metric = prometheus::Gauge::new(
@@ -206,7 +206,7 @@ impl<M> Server<M> {
 }
 
 impl<D: Device> Server<DeviceManager<D, governor::clock::DefaultClock>> {
-    fn with_device(dev: D) -> Self {
+    pub fn with_device(dev: D) -> Self {
         return Server::new(DeviceManager::new(dev));
     }
 }
@@ -237,7 +237,7 @@ impl<M: Manager + Clone + Send + Sync + 'static> Server<M> {
         return warp::reply::json(&self.manager.is_ready());
     }
 
-    fn routes(&self) -> warp::filters::BoxedFilter<(impl warp::Reply,)> {
+    pub fn routes(&self) -> warp::filters::BoxedFilter<(impl warp::Reply,)> {
         let srv = (*self).clone();
         let self_filter = warp::any().map(move || srv.clone());
         let metrics = warp::path!("metrics")
