@@ -210,7 +210,7 @@ impl Device for T6615 {
 }
 
 #[cfg(test)]
-mod fake {
+mod tests {
     use super::*;
 
     use std::sync;

@@ -5,8 +5,10 @@ authors = ["Josh Kunz <josh@kunz.xyz>"]
 edition = "2018"
 
 [dependencies]
-warp = "0.2"
+warp = "0.3"
 prometheus = "0.11"
+governor = "0.3"
+serde_json = "1"
 
 [dependencies.serialport]
 version = "4"
@@ -22,5 +24,4 @@ features = ["clock", "std"]
 
 [dependencies.tokio]
 version = "0.2"
-features = ["rt-threaded", "macros", "time"]
-
+features = ["rt-threaded", "macros", "time", "net", "stream"]
