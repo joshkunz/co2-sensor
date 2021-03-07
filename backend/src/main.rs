@@ -7,6 +7,7 @@ use tokio;
 use warp;
 use warp::Filter;
 mod device;
+mod server;
 mod wire;
 use device::Device;
 use std::thread;
