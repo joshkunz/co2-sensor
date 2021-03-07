@@ -233,6 +233,10 @@ impl<M: Manager + Clone + Send + Sync + 'static> Server<M> {
         return warp::reply();
     }
 
+    fn render_is_ready(self) -> impl warp::Reply {
+        return warp::reply::json(&self.manager.is_ready());
+    }
+
     fn routes(&self) -> warp::filters::BoxedFilter<(impl warp::Reply,)> {
         let srv = (*self).clone();
         let self_filter = warp::any().map(move || srv.clone());
@@ -240,9 +244,12 @@ impl<M: Manager + Clone + Send + Sync + 'static> Server<M> {
             .and(self_filter.clone())
             .map(Self::render_metrics);
         let calibrate = warp::path!("calibrate")
-            .and(self_filter)
+            .and(self_filter.clone())
             .map(Self::render_put_calibrate);
-        return metrics.or(calibrate).boxed();
+        let is_ready = warp::path!("isready")
+            .and(self_filter.clone())
+            .map(Self::render_is_ready);
+        return metrics.or(calibrate).or(is_ready).boxed();
     }
 }
 
@@ -423,9 +430,24 @@ mod tests {
             .with_calibrate_wait_signal(wait_out)
             .build();
         let mgr = DeviceManager::new(fake.clone());
+        let srv = Server::new(mgr.clone());
+
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let mut is_ready = || -> bool {
+            let reply = rt.block_on(async {
+                warp::test::request()
+                    .path("/isready")
+                    .reply(&srv.routes())
+                    .await
+            });
+            assert_eq!(reply.status(), 200);
+
+            // Should return a json-encoded bool saying that we're ready.
+            return serde_json::from_slice(reply.body()).unwrap();
+        };
 
         // No calibrate ongoing, the device should be ready for measurements.
-        assert!(mgr.is_ready());
+        assert!(is_ready());
 
         // Start a calibration, plus make sure the calibration thread is going.
         mgr.calibrate();
@@ -434,15 +456,16 @@ mod tests {
             .unwrap();
 
         // Device should not be ready in calibration.
-        assert!(!mgr.is_ready());
+        assert!(!is_ready());
 
         // Let the calibration finish, and make sure we've returned to the
         // ready state.
         wait_in.send(()).unwrap();
+
         // TODO(jkz): Figure out a better way to make sure that the calibration
         // thread has terminated. For now, we use a 250ms grace period.
         thread::sleep(time::Duration::from_millis(250));
 
-        assert!(mgr.is_ready());
+        assert!(is_ready());
     }
 }
