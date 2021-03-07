@@ -73,7 +73,8 @@ impl<D: device::Device> Device for D {
 
 trait Manager {
     fn measure(&self) -> Result<wire::Concentration>;
-    fn calibrate(&self) -> Result<()>;
+    fn calibrate(&self) -> ();
+    fn is_ready(&self) -> bool;
 }
 
 type RateLimiter<C> =
@@ -114,6 +115,19 @@ impl<D, C: governor::clock::Clock> DeviceManager<D, C> {
             last_measure: sync::Arc::new(sync::Mutex::new(Option::None)),
         };
     }
+
+    fn maybe_lock_device(&self) -> Result<sync::MutexGuard<D>> {
+        let _dev = match self.device.try_lock() {
+            Ok(guard) => guard,
+            Err(sync::TryLockError::WouldBlock) => {
+                return Err(Error::from("rate limited, but no measurement taken"));
+            }
+            // Just panic if we get a poisoned/other error. This shouldn't
+            // happen, and indicates a run-time bug.
+            e @ Err(_) => e.unwrap(),
+        };
+        return Ok(_dev);
+    }
 }
 
 impl<D, C> Manager for DeviceManager<D, C>
@@ -121,31 +135,27 @@ where
     D: Device + Send + 'static,
     C: governor::clock::Clock + Send + Sync + 'static,
 {
+    fn is_ready(&self) -> bool {
+        // If we can lock the device, then we're "ready" to receive
+        // measurements.
+        return self.maybe_lock_device().is_ok();
+    }
+
     fn measure(&self) -> Result<wire::Concentration> {
         let mut last_measure = self.last_measure.lock().unwrap();
         if self.limiter.check().is_err() {
             // We're rate-limited. Just return the previous measure.
-            return match *last_measure {
-                Some(v) => Ok(v),
-                // TODO(jkz): Make it so this can't happen.
-                None => Err(Error::from("rate limited, but no measurement taken")),
-            };
+            return Ok(last_measure.expect(
+                "Since this only triggers when we are rate limited, \
+                         there should always be a value in this option.",
+            ));
         }
-        let mut dev = match self.device.try_lock() {
-            Ok(guard) => guard,
-            Err(sync::TryLockError::WouldBlock) => {
-                return Err(Error::from("the managed device is calibrating"))
-            }
-            // Just panic if we get a poisoned/other error. This shouldn't
-            // happen, and indicates a run-time bug.
-            e @ Err(_) => e.unwrap(),
-        };
-        let measurement = dev.read_co2()?;
+        let measurement = self.maybe_lock_device()?.read_co2()?;
         *last_measure = Some(measurement);
         return Ok(measurement);
     }
 
-    fn calibrate(&self) -> Result<()> {
+    fn calibrate(&self) -> () {
         let (calibration_started, calibration_in_progress) = sync::mpsc::channel();
         let mgr = (*self).clone();
         thread::spawn(move || {
@@ -155,8 +165,8 @@ where
             // somehow. Logs? Lockup the manager? Callback?
             let _ = dev.calibrate_co2(AMBIENT_CONCENTRATION, thread::sleep);
         });
-        calibration_in_progress.recv()?;
-        return Ok(());
+        calibration_in_progress.recv().unwrap();
+        return;
     }
 }
 
@@ -176,7 +186,7 @@ impl<M: Manager + Clone> Clone for Server<M> {
     }
 }
 
-impl<M: Manager + Clone + Send + Sync + 'static> Server<M> {
+impl<M> Server<M> {
     fn new(manager: M) -> Self {
         let registry = prometheus::Registry::new();
         // TODO(jkz): These errors should be propogated probably.
@@ -193,7 +203,15 @@ impl<M: Manager + Clone + Send + Sync + 'static> Server<M> {
             co2_metric: co2_metric,
         };
     }
+}
 
+impl<D: Device> Server<DeviceManager<D, governor::clock::DefaultClock>> {
+    fn with_device(dev: D) -> Self {
+        return Server::new(DeviceManager::new(dev));
+    }
+}
+
+impl<M: Manager + Clone + Send + Sync + 'static> Server<M> {
     fn render_metrics(self) -> String {
         match self.manager.measure() {
             Ok(c) => self.co2_metric.set(c.ppm() as f64),
@@ -209,12 +227,22 @@ impl<M: Manager + Clone + Send + Sync + 'static> Server<M> {
         return String::from_utf8(out).unwrap();
     }
 
+    fn render_put_calibrate(self) -> impl warp::Reply {
+        // TODO(jkz): Handle this error correctly.
+        self.manager.calibrate();
+        return warp::reply();
+    }
+
     fn routes(&self) -> warp::filters::BoxedFilter<(impl warp::Reply,)> {
         let srv = (*self).clone();
+        let self_filter = warp::any().map(move || srv.clone());
         let metrics = warp::path!("metrics")
-            .and(warp::any().map(move || srv.clone()))
+            .and(self_filter.clone())
             .map(Self::render_metrics);
-        return metrics.boxed();
+        let calibrate = warp::path!("calibrate")
+            .and(self_filter)
+            .map(Self::render_put_calibrate);
+        return metrics.or(calibrate).boxed();
     }
 }
 
@@ -223,25 +251,23 @@ mod tests {
     use super::*;
     use tokio;
 
+    #[derive(Default)]
     struct _FakeDeviceData {
-        co2: sync::Mutex<Option<wire::Concentration>>,
+        co2: Option<wire::Concentration>,
+        reference: Option<wire::Concentration>,
+        calibrate_called_signal: Option<sync::mpsc::Sender<()>>,
+        calibrate_wait_signal: Option<sync::mpsc::Receiver<()>>,
     }
 
     #[derive(Clone)]
     struct FakeDevice {
-        data: sync::Arc<_FakeDeviceData>,
-    }
-
-    impl FakeDevice {
-        fn with_data(d: _FakeDeviceData) -> Self {
-            return FakeDevice { data: d.into() };
-        }
+        data: sync::Arc<sync::Mutex<_FakeDeviceData>>,
     }
 
     impl Device for FakeDevice {
         fn read_co2(&mut self) -> Result<wire::Concentration> {
-            let current = self.data.co2.lock().unwrap();
-            return match *current {
+            let data = self.data.lock().unwrap();
+            return match data.co2 {
                 Some(c) => Ok(c),
                 None => Err(Error::from("no concentration set on fake")),
             };
@@ -249,18 +275,66 @@ mod tests {
 
         fn calibrate_co2<T: Fn(time::Duration)>(
             &mut self,
-            _reference: wire::Concentration,
+            reference: wire::Concentration,
             _sleep_fn: T,
         ) -> Result<()> {
+            let mut data = self.data.lock().unwrap();
+            if let Some(chan) = &data.calibrate_called_signal {
+                chan.send(()).unwrap();
+            }
+            data.reference = Option::from(reference);
+            if let Some(chan) = &data.calibrate_wait_signal {
+                chan.recv_timeout(time::Duration::from_secs(30)).unwrap();
+            }
             return Err(Error::from("not implemented"));
+        }
+    }
+
+    impl FakeDevice {
+        fn set_co2(&self, to: wire::Concentration) {
+            let mut data = self.data.lock().unwrap();
+            data.co2 = Option::from(to);
+        }
+
+        fn reference(&self) -> Option<wire::Concentration> {
+            let data = self.data.lock().unwrap();
+            return data.reference;
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeBuilder {
+        data: _FakeDeviceData,
+    }
+
+    impl FakeBuilder {
+        fn with_co2(mut self, c: wire::Concentration) -> Self {
+            self.data.co2 = Option::from(c);
+            return self;
+        }
+
+        fn with_calibrate_called_signal(mut self, c: sync::mpsc::Sender<()>) -> Self {
+            self.data.calibrate_called_signal = Option::from(c);
+            return self;
+        }
+
+        fn with_calibrate_wait_signal(mut self, c: sync::mpsc::Receiver<()>) -> Self {
+            self.data.calibrate_wait_signal = Option::from(c);
+            return self;
+        }
+
+        fn build(self) -> FakeDevice {
+            return FakeDevice {
+                data: sync::Mutex::new(self.data).into(),
+            };
         }
     }
 
     #[test]
     fn test_manager_double_read() {
-        let fake = FakeDevice::with_data(_FakeDeviceData {
-            co2: Option::from(wire::Concentration::PPM(200)).into(),
-        });
+        let fake = FakeBuilder::default()
+            .with_co2(wire::Concentration::PPM(200))
+            .build();
         let clock = governor::clock::FakeRelativeClock::default();
         let mgr = DeviceManager::new_with_clock(fake.clone(), &clock);
 
@@ -270,7 +344,7 @@ mod tests {
         // time. The manager should rate-limit the request, and we should see
         // stale data.
 
-        *fake.data.co2.lock().unwrap() = Option::from(wire::Concentration::PPM(55));
+        fake.set_co2(wire::Concentration::PPM(55));
         assert_eq!(mgr.measure().unwrap(), wire::Concentration::PPM(200));
 
         // Advance *just* past the max measure rate, so we can trigger another
@@ -280,18 +354,17 @@ mod tests {
 
         // Just for good measure, change the concentration back, and
         // make sure we see latch the updated concentration.
-        *fake.data.co2.lock().unwrap() = Option::from(wire::Concentration::PPM(200));
+        fake.set_co2(wire::Concentration::PPM(200));
         assert_eq!(mgr.measure().unwrap(), wire::Concentration::PPM(55));
     }
 
     #[test]
     fn test_metrics() {
         // Arrange.
-        let fake = FakeDevice::with_data(_FakeDeviceData {
-            co2: Option::from(wire::Concentration::PPM(100)).into(),
-        });
-        let mgr = DeviceManager::new(fake);
-        let srv = Server::new(mgr);
+        let fake = FakeBuilder::default()
+            .with_co2(wire::Concentration::PPM(100))
+            .build();
+        let srv = Server::with_device(fake);
 
         let mut rt = tokio::runtime::Runtime::new().unwrap();
         let reply = rt.block_on(async {
@@ -305,5 +378,71 @@ mod tests {
         let body = std::str::from_utf8(reply.body()).unwrap();
         println!("body:\n{}", body);
         assert!(body.contains("co2_ppm 100"));
+    }
+
+    #[test]
+    fn test_calibration_basic() {
+        let (called_in, called_out) = sync::mpsc::channel();
+        let fake = FakeBuilder::default()
+            .with_calibrate_called_signal(called_in)
+            .build();
+        let srv = Server::with_device(fake.clone());
+
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let reply = rt.block_on(async {
+            warp::test::request()
+                .method("PUT")
+                .path("/calibrate")
+                .reply(&srv.routes())
+                .await
+        });
+        assert_eq!(reply.status(), 200);
+
+        // Make sure that calibrate is actually called on the device (i.e.,
+        // calibration has started). Note: Even though calibration should
+        // be called almost immediately, it's important to use a channel here
+        // because it's not guarnteed to be called when /calibrate returns.
+        assert!(called_out
+            .recv_timeout(time::Duration::from_secs(5))
+            .is_ok());
+
+        // And since we know calibrate has been called, make sure the
+        // reference concentration was set to the ambient concentration.
+        assert_eq!(fake.reference(), Some(AMBIENT_CONCENTRATION));
+    }
+
+    // TODO(jkz): This is a mediocre test. It should fail when if `wait_in.send`
+    // is never called. Currently, if the calibration thread panics, it's not
+    // visibile to this test.
+    #[test]
+    fn test_is_ready() {
+        let (started_in, started_out) = sync::mpsc::channel();
+        let (wait_in, wait_out) = sync::mpsc::channel();
+        let fake = FakeBuilder::default()
+            .with_calibrate_called_signal(started_in)
+            .with_calibrate_wait_signal(wait_out)
+            .build();
+        let mgr = DeviceManager::new(fake.clone());
+
+        // No calibrate ongoing, the device should be ready for measurements.
+        assert!(mgr.is_ready());
+
+        // Start a calibration, plus make sure the calibration thread is going.
+        mgr.calibrate();
+        started_out
+            .recv_timeout(time::Duration::from_secs(5))
+            .unwrap();
+
+        // Device should not be ready in calibration.
+        assert!(!mgr.is_ready());
+
+        // Let the calibration finish, and make sure we've returned to the
+        // ready state.
+        wait_in.send(()).unwrap();
+        // TODO(jkz): Figure out a better way to make sure that the calibration
+        // thread has terminated. For now, we use a 250ms grace period.
+        thread::sleep(time::Duration::from_millis(250));
+
+        assert!(mgr.is_ready());
     }
 }
