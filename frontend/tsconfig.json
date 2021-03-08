@@ -2,8 +2,9 @@
   "extends": "./node_modules/gts/tsconfig-google.json",
   "compilerOptions": {
     "rootDir": "src",
-    "outDir": "build",
+    "outDir": "./",
     "target": "ES2019",
+    "lib": ["ES2019", "DOM"],
     "jsx": "react",
     "strict": true,
     "noImplicitAny": true,
@@ -12,10 +13,11 @@
     "noUnusedParameters": true,
     "moduleResolution": "node",
     "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true
   },
   "include": [
     "src/**/*.ts",
-    "test/**/*.ts"
+    "src/**/*.tsx",
   ]
 }
