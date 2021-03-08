@@ -1,0 +1,4 @@
+# Tests are dev-only dependencies.
+src/*.test.ts
+src/*.test.tsx
+src/mocks/**
