@@ -237,19 +237,38 @@ impl<M: Manager + Clone + Send + Sync + 'static> Server<M> {
         return warp::reply::json(&self.manager.is_ready());
     }
 
+    fn render_co2(self) -> Box<dyn warp::Reply> {
+        return match self.manager.measure() {
+            Ok(concentration) => {
+                Box::new(warp::reply::json(&concentration.ppm())) as Box<dyn warp::Reply>
+            }
+            Err(e) => Box::new(warp::reply::with_status(
+                e.0,
+                http::status::StatusCode::INTERNAL_SERVER_ERROR,
+            )) as Box<dyn warp::Reply>,
+        };
+    }
+
     pub fn routes(&self) -> warp::filters::BoxedFilter<(impl warp::Reply,)> {
         let srv = (*self).clone();
         let self_filter = warp::any().map(move || srv.clone());
         let metrics = warp::path!("metrics")
+            .and(warp::filters::method::get())
             .and(self_filter.clone())
             .map(Self::render_metrics);
         let calibrate = warp::path!("calibrate")
+            .and(warp::filters::method::put())
             .and(self_filter.clone())
             .map(Self::render_put_calibrate);
         let is_ready = warp::path!("isready")
+            .and(warp::filters::method::get())
             .and(self_filter.clone())
             .map(Self::render_is_ready);
-        return metrics.or(calibrate).or(is_ready).boxed();
+        let co2 = warp::path!("co2")
+            .and(warp::filters::method::get())
+            .and(self_filter.clone())
+            .map(Self::render_co2);
+        return metrics.or(calibrate).or(is_ready).or(co2).boxed();
     }
 }
 
@@ -467,5 +486,24 @@ mod tests {
         thread::sleep(time::Duration::from_millis(250));
 
         assert!(is_ready());
+    }
+
+    #[test]
+    fn test_get_co2() {
+        let want_measurement = wire::Concentration::PPM(198);
+        let fake = FakeBuilder::default().with_co2(want_measurement).build();
+        let srv = Server::with_device(fake.clone());
+
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let reply = rt.block_on(async {
+            warp::test::request()
+                .path("/co2")
+                .reply(&srv.routes())
+                .await
+        });
+
+        assert_eq!(reply.status(), 200);
+        let measurement: u16 = serde_json::from_slice(reply.body()).unwrap();
+        assert_eq!(measurement, want_measurement.ppm());
     }
 }

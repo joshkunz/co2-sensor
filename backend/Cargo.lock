@@ -127,6 +127,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "governor",
+ "http",
  "prometheus",
  "serde_json",
  "serialport",
