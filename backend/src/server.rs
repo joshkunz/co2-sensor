@@ -174,6 +174,7 @@ pub struct Server<M> {
     registry: sync::Arc<prometheus::Registry>,
     manager: M,
     co2_metric: prometheus::Gauge,
+    static_dir: String,
 }
 
 impl<M: Manager + Clone> Clone for Server<M> {
@@ -182,12 +183,53 @@ impl<M: Manager + Clone> Clone for Server<M> {
             registry: self.registry.clone(),
             manager: self.manager.clone(),
             co2_metric: self.co2_metric.clone(),
+            static_dir: self.static_dir.clone(),
         };
     }
 }
 
+pub struct Builder<M> {
+    manager: Option<M>,
+    static_dir: String,
+}
+
+impl<M> Default for Builder<M> {
+    fn default() -> Self {
+        return Builder {
+            manager: None,
+            static_dir: String::new(),
+        };
+    }
+}
+
+impl<M> Builder<M> {
+    pub fn manager(&mut self, manager: M) -> &mut Self {
+        self.manager = Some(manager);
+        return self;
+    }
+
+    pub fn static_dir(&mut self, dir: &'_ str) -> &mut Self {
+        self.static_dir = String::from(dir);
+        return self;
+    }
+
+    pub fn build(self) -> Result<Server<M>> {
+        return Ok(Server::new(
+            self.manager.ok_or(Error::from("No manager provided"))?,
+            &self.static_dir,
+        ));
+    }
+}
+
+impl<D: Device> Builder<DeviceManager<D, governor::clock::DefaultClock>> {
+    pub fn device(&mut self, device: D) -> &mut Self {
+        self.manager = Some(DeviceManager::new(device));
+        return self;
+    }
+}
+
 impl<M> Server<M> {
-    pub fn new(manager: M) -> Self {
+    fn new(manager: M, static_dir: &'_ str) -> Self {
         let registry = prometheus::Registry::new();
         // TODO(jkz): These errors should be propogated probably.
         let co2_metric = prometheus::Gauge::new(
@@ -201,13 +243,8 @@ impl<M> Server<M> {
             registry: sync::Arc::new(registry),
             manager: manager,
             co2_metric: co2_metric,
+            static_dir: String::from(static_dir),
         };
-    }
-}
-
-impl<D: Device> Server<DeviceManager<D, governor::clock::DefaultClock>> {
-    pub fn with_device(dev: D) -> Self {
-        return Server::new(DeviceManager::new(dev));
     }
 }
 
@@ -268,7 +305,15 @@ impl<M: Manager + Clone + Send + Sync + 'static> Server<M> {
             .and(warp::filters::method::get())
             .and(self_filter.clone())
             .map(Self::render_co2);
-        return metrics.or(calibrate).or(is_ready).or(co2).boxed();
+        // TODO(jkz): figure out some way to disable this when static_dir is
+        // not set.
+        let static_f = warp::any().and(warp::fs::dir(self.static_dir.clone()));
+        return metrics
+            .or(calibrate)
+            .or(is_ready)
+            .or(co2)
+            .or(static_f)
+            .boxed();
     }
 }
 
@@ -390,7 +435,9 @@ mod tests {
         let fake = FakeBuilder::default()
             .with_co2(wire::Concentration::PPM(100))
             .build();
-        let srv = Server::with_device(fake);
+        let mut builder = Builder::default();
+        builder.device(fake);
+        let srv = builder.build().unwrap();
 
         let mut rt = tokio::runtime::Runtime::new().unwrap();
         let reply = rt.block_on(async {
@@ -412,7 +459,9 @@ mod tests {
         let fake = FakeBuilder::default()
             .with_calibrate_called_signal(called_in)
             .build();
-        let srv = Server::with_device(fake.clone());
+        let mut builder = Builder::default();
+        builder.device(fake.clone());
+        let srv = builder.build().unwrap();
 
         let mut rt = tokio::runtime::Runtime::new().unwrap();
         let reply = rt.block_on(async {
@@ -449,7 +498,7 @@ mod tests {
             .with_calibrate_wait_signal(wait_out)
             .build();
         let mgr = DeviceManager::new(fake.clone());
-        let srv = Server::new(mgr.clone());
+        let srv = Server::new(mgr.clone(), "");
 
         let mut rt = tokio::runtime::Runtime::new().unwrap();
         let mut is_ready = || -> bool {
@@ -492,7 +541,9 @@ mod tests {
     fn test_get_co2() {
         let want_measurement = wire::Concentration::PPM(198);
         let fake = FakeBuilder::default().with_co2(want_measurement).build();
-        let srv = Server::with_device(fake.clone());
+        let mut builder = Builder::default();
+        builder.device(fake.clone());
+        let srv = builder.build().unwrap();
 
         let mut rt = tokio::runtime::Runtime::new().unwrap();
         let reply = rt.block_on(async {

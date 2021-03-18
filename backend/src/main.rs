@@ -7,23 +7,32 @@ mod device;
 mod server;
 mod wire;
 use device::Device;
+use std::default::Default;
 use std::thread;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    if args.len() != 2 {
-        eprintln!("Must supply serial device address.");
+    if args.len() != 3 {
+        eprintln!("Must supply <static-dir> <serial-device>");
         process::exit(1);
     }
-    let mut sensor = device::T6615::new(&args[1]).expect("unable to connect to sensor");
+    let (static_dir, serial_device_path) = (&args[1], &args[2]);
+    let mut sensor = device::T6615::new(serial_device_path).expect("unable to connect to sensor");
 
     println!("Waiting for warmup...");
     sensor.wait_warmup(thread::sleep).unwrap();
 
     println!("Booting...");
-    let server = server::Server::with_device(sensor);
+    let mut server_builder = server::Builder::default();
+    server_builder.device(sensor);
+    server_builder.static_dir(static_dir);
+    let server = server_builder.build().expect("failed to build server");
 
-    println!("Serving on 0.0.0.0:8000");
-    let mut rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(warp::serve(server.routes()).run((net::Ipv4Addr::new(0, 0, 0, 0), 8000)));
+    println!("Serving on 0.0.0.0:80");
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        warp::serve(server.routes())
+            .run((net::Ipv4Addr::new(0, 0, 0, 0), 80))
+            .await;
+    });
 }
