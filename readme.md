@@ -9,8 +9,6 @@ potentially others in the future.
 This project is a work-in-progress. TODO:
 
 * Proper configuration and calibration for the sensor.
-* On-device display.
-* Detailed cross-build/deployment/wiring docs.
 
 ## Assembly 
 
@@ -29,29 +27,85 @@ The project is relatively simple, only using 3 parts:
   [Adafruit 4-Channel Converter](https://www.adafruit.com/product/757), but
   other cheaper converters should work as well.
 
-### Configuring the Raspberry Pi
-
-TODO
-
 ### Wiring Schematic
 
-TODO
+![A schematic showing how the raspberry pi connects through the logic-level
+converter to the Telaire T6615](docs/wiring-diagram.png)
+
+TODO: Write something nicer.
+
+### Configuring the Raspberry Pi Zero
+
+*   Use the [RPI OS Imager](https://www.raspberrypi.org/documentation/installation/installing-images/README.md)
+    to install the image onto an SD Card. Install `Raspberry Pi OS Lite`.
+*   On the boot partition, add an empty file named `ssh`.
+*   On the booth partition, add a `wpa_supplicant.conf` file as instructed
+    [here](https://www.raspberrypi.org/documentation/configuration/wireless/headless.md).
+*   Boot the device, and connect via SSH.
+*   Run `sudo raspi-config`
+*   In `raspi-config`: `1 System Options > S1 Wireless Lan`, then setup WiFi.
+*   In `raspi-config`: `3 Interface Options > P2 SSH`, then enable SSH.
+*   In `raspi-config`: `3 Interface Options > P6 Serial Port`, then disable
+    login over serial, and enable the serial port. **Do not** enable login over
+    the serial port, it will make serial communication unreliable.
+*   Quit and re-boot.
 
 ### Building + Loading the Program
 
-TODO
+* Install [Rust's `cross`](https://github.com/rust-embedded/cross#installation)
+  and start the Docker daemon as mentioned in the instructions.
+* In `backend/` run:
+  
+  ```
+  cross build --target=arm-unknown-linux-gnueabihf --release
+  ```
+  
+  This builds a release binary of the backend that can run on a Raspberry Pi
+  Zero W.
+* Copy the binary over to the Raspberry Pi. Still in `backend/` run:
+  
+  ```
+  RASPBERRY_PI_IP=10.0...  # Replace with actual IP
+  scp target/arm-unknown-linux-gnueabihf/release/co2 pi@$RASPBERRY_PI_IP:~
+  ```
+
+  To copy the server binary to the Raspberry Pi.
+* In `frontend/`, run:
+
+  ```
+  rm -r dist/  # to clean up any previous builds.
+  yarn run parcel build src/index.html
+  ```
+
+  To build the frontend.
+* Still in `frontend/` copy the frontend onto the Pi using a command like:
+
+  ```
+  RASPBERRY_PI_IP=10.0....  # Replace with actual IP
+  rsync -hurt dist/ pi@$RASPBERRY_PI_IP:~/frontend
+  ```
+* Finally, ssh onto the Pi, and run the server:
+  
+  ```
+  RASPBERRY_PI_IP=10.0...  # Replace with actual IP
+  ssh pi@$RASPBERRY_PI_IP
+  # Now on the PI
+  sudo ./co2 ./frontend /dev/serial0
+  # Note, you may need to use /dev/serial1 if not using a Raspberry Pi Zero W
+  ```
 
 ### Configuring the Sensor
 
-TODO
+Configuration of the sensor is done through the sensor's web interface. Browse
+to the web interface by going to `http://<your raspberry pi IP>` in your web
+browser of choice. On that page is a "Calibrate" button, when pressed it will
+walk through calibration.
+
+TODO: Add elevation calibration.
 
 ### Reading Measurements
 
-TODO
-
-## EXtra
-
-### Raspberry Pi-2 Setup
-
-1. Use `raspi-config > Interface Options > Serial`, disable the login console,
-   and enable the serial device. Communication is not reliable without it.
+The current CO2 reading is displayed on the web-interface at
+`http://<your raspberry pi IP>`. The web interface also provides a `/metrics`
+endpoint (`http://<your raspberry pi IP>/metrics`) that can be scraped by
+the open source [Prometheus](https://prometheus.io/) monitoring software.
