@@ -41,34 +41,57 @@ function calibrationFinished(): [Promise<undefined>, () => void] {
   return [p, cancel];
 }
 
-function CalibrationGoOutside(props: {onStart: () => void}) {
-  // Special handler that cancels the default form submit (reloading the page)
-  // when the user types <Enter> in the form.
-  const handleSubmit = (e: FormEvent) => {
+function CalibrationLanding(props: {onStart?: () => void}) {
+  const [validated, setValidated] = useState(false);
+
+  const submit = (e: FormEvent) => {
     e.preventDefault();
-    props.onStart();
+    e.stopPropagation();
+
+    const form = e.currentTarget as HTMLFormElement;
+    if (form.checkValidity() === false) {
+      setValidated(true);
+      return;
+    }
+
+    if (props.onStart !== undefined) {
+      props.onStart();
+    }
   };
+
   return (
     <>
       <Card.Title>Go Outside</Card.Title>
       <Card.Text>
         The outdoor air has a fairly consistent concentration of CO<sub>2</sub>.
         This well-known concentration will be used as a reference to calibrate
-        the sensor. Click next once the device is outdoors.
+        the sensor. The device also needs to know the local elevation (within
+        about 500ft) to calculate local air pressure. Enter the elevation, and
+        Click "Set and Start" once the device is outdoors. Calibration will
+        begin immediately at that point.
       </Card.Text>
-      <Form onSubmit={handleSubmit} inline>
-        <InputGroup className="mb-3 mr-3">
+      <Form noValidate validated={validated} onSubmit={submit}>
+        <InputGroup className="mb-3">
           <FormControl
             id="elevation-value"
             aria-label="Elevation"
             aria-describedby="elevation-units"
             placeholder="Elevation"
+            type="number"
+            min="0"
+            // Approx. Height of Mt. Everest.
+            max="29000"
+            required
           />
           <InputGroup.Append>
             <InputGroup.Text id="elevation-units">ft</InputGroup.Text>
           </InputGroup.Append>
+          <FormControl.Feedback type="valid">Looks Good!</FormControl.Feedback>
+          <FormControl.Feedback type="invalid">
+            Must be between 0 and 29k ft.
+          </FormControl.Feedback>
         </InputGroup>
-        <Button className="mb-3" variant="primary" onClick={props.onStart}>
+        <Button variant="primary" type="submit">
           Set and Start
         </Button>
       </Form>
@@ -255,7 +278,7 @@ function Wizard(props: WizardProps) {
   let body: JSX.Element | null = null;
 
   if (calibrationPending) {
-    body = <CalibrationGoOutside onStart={start} />;
+    body = <CalibrationLanding onStart={start} />;
   } else {
     body = (
       <Calibrating successful={state.value === 'calibration_successful'} />
@@ -293,4 +316,4 @@ function Wizard(props: WizardProps) {
   );
 }
 
-export {Wizard};
+export {Wizard, CalibrationLanding};

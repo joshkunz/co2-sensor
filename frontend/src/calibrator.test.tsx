@@ -6,7 +6,7 @@ import '@testing-library/jest-dom';
 import * as msw from 'msw';
 import * as mswNode from 'msw/node';
 
-import {Wizard} from './calibrator';
+import {Wizard, CalibrationLanding} from './calibrator';
 
 // Set up our mocked msw server, and clear it after each test runs.
 const server = mswNode.setupServer();
@@ -36,9 +36,54 @@ test('wizard calibrate button opens dialog', () => {
     screen.getByRole('region', {name: 'Calibration Wizard'})
   ).toBeVisible();
 
-  expect(screen.getByRole('textbox', {name: 'Elevation'})).toBeVisible();
+  expect(screen.getByRole('spinbutton', {name: 'Elevation'})).toBeVisible();
   expect(screen.getByText('ft')).toBeVisible();
-  expect(screen.getByRole('button', {name: 'Set and Start'})).toBeVisible();
+  const startButton = screen.getByRole('button', {name: 'Set and Start'});
+  expect(startButton).toBeVisible();
+});
+
+test('calibration landing has elevation box and start button', () => {
+  render(<CalibrationLanding />);
+  expect(screen.getByRole('spinbutton', {name: 'Elevation'})).toBeVisible();
+  expect(screen.getByText('ft')).toBeVisible();
+  const startButton = screen.getByRole('button', {name: 'Set and Start'});
+  expect(startButton).toBeVisible();
+});
+
+test('calibration landing shows error on empty elevation', () => {
+  render(<CalibrationLanding />);
+
+  userEvent.click(screen.getByRole('button', {name: 'Set and Start'}));
+  expect(screen.getByText(/^Must be between/));
+});
+
+test('calibraton landing shows error on negative elevation', () => {
+  render(<CalibrationLanding />);
+
+  userEvent.type(screen.getByRole('spinbutton', {name: 'Elevation'}), '-999');
+  userEvent.click(screen.getByRole('button', {name: 'Set and Start'}));
+  expect(screen.getByText(/^Must be between/));
+});
+
+test('calibraton landing shows error on extremely large elevation', () => {
+  render(<CalibrationLanding />);
+
+  // For reference, Mt. Everest is 29k ft.
+  userEvent.type(screen.getByRole('spinbutton', {name: 'Elevation'}), '100000');
+  userEvent.click(screen.getByRole('button', {name: 'Set and Start'}));
+  expect(screen.getByText(/^Must be between/));
+});
+
+test('calibration landing calls onClick on valid elevation', () => {
+  const mockStart = jest.fn();
+
+  render(<CalibrationLanding onStart={mockStart} />);
+
+  // For reference, Mt. Everest is 29k ft.
+  userEvent.type(screen.getByRole('spinbutton', {name: 'Elevation'}), '1000');
+  userEvent.click(screen.getByRole('button', {name: 'Set and Start'}));
+  expect(screen.getByText(/^Must be between/));
+  expect(mockStart).toHaveBeenCalled();
 });
 
 test('wizard successfull calibration', async () => {
@@ -60,6 +105,9 @@ test('wizard successfull calibration', async () => {
 
   // Click "Calibrate" to open the calibration dialog.
   userEvent.click(screen.getByRole('button', {name: 'Calibrate'}));
+
+  // Enter 0ft in the elevation text box.
+  userEvent.type(screen.getByRole('spinbutton', {name: 'Elevation'}), '0');
 
   // Click "Start" to start the calibration.
   userEvent.click(screen.getByRole('button', {name: 'Set and Start'}));
