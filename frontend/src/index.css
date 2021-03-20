@@ -24,3 +24,7 @@
     display: inline-block;
     margin-bottom: 2.5pt;
 }
+
+.current-elevation {
+    font-size: 10pt;
+}

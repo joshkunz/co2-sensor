@@ -32,5 +32,8 @@ export const worker = setupWorker(
   }),
   rest.get('/co2', (_, res, ctx) => {
     return res(ctx.json(globalState.co2_ppm));
+  }),
+  rest.get('/elevation', (_, res, ctx) => {
+    return res(ctx.json(1500));
   })
 );

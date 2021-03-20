@@ -9,7 +9,12 @@ import * as mswNode from 'msw/node';
 import {Wizard, CalibrationLanding} from './calibrator';
 
 // Set up our mocked msw server, and clear it after each test runs.
-const server = mswNode.setupServer();
+const server = mswNode.setupServer(
+  msw.rest.get('/elevation', (_, res, ctx) => {
+    res(ctx.json(1500));
+  })
+);
+
 beforeAll(() => server.listen());
 afterEach(() => server.resetHandlers());
 afterAll(() => server.close());
@@ -84,6 +89,32 @@ test('calibration landing calls onClick on valid elevation', () => {
   userEvent.click(screen.getByRole('button', {name: 'Set and Start'}));
   expect(screen.getByText(/^Must be between/));
   expect(mockStart).toHaveBeenCalled();
+});
+
+test('calibration landing shows current elevation', async () => {
+  const currentElevation = 1500;
+  let signal!: (v: undefined) => void;
+  const wait = new Promise(resolve => {
+    signal = resolve;
+  });
+  server.use(
+    msw.rest.get('/elevation', async (_, res, ctx) => {
+      await wait;
+      return res(ctx.json(currentElevation));
+    })
+  );
+
+  render(<CalibrationLanding />);
+  const label = screen.getByText('Currently Configured Elevation:');
+  expect(label).toBeInTheDocument();
+  expect(label.nextSibling).toBeInTheDocument();
+  expect(label.nextSibling).toHaveTextContent('loading...');
+
+  signal(undefined);
+
+  const configured = await screen.findByText(/^1500/);
+  expect(configured).toBeInTheDocument();
+  expect(configured.previousSibling).toBe(label);
 });
 
 test('wizard successfull calibration', async () => {

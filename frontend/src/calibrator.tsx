@@ -43,6 +43,23 @@ function calibrationFinished(): [Promise<undefined>, () => void] {
 
 function CalibrationLanding(props: {onStart?: () => void}) {
   const [validated, setValidated] = useState(false);
+  const [configuredElevation, setConfiguredElevation] = useState<
+    number | undefined
+  >(undefined);
+  useEffect(() => {
+    const signal = axios.CancelToken.source();
+    (async () => {
+      try {
+        const resp = await axios.get('/elevation', {cancelToken: signal.token});
+        setConfiguredElevation(resp.data);
+      } catch {
+        // TODO: Handle this error.
+      }
+    })();
+    return () => {
+      signal.cancel();
+    };
+  }, []);
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -70,6 +87,14 @@ function CalibrationLanding(props: {onStart?: () => void}) {
         Click "Set and Start" once the device is outdoors. Calibration will
         begin immediately at that point.
       </Card.Text>
+      <div className="current-elevation font-italic">
+        <span className="mr-1">Currently Configured Elevation:</span>
+        <span>
+          {configuredElevation === undefined
+            ? 'loading...'
+            : `${configuredElevation} ft.`}
+        </span>
+      </div>
       <Form noValidate validated={validated} onSubmit={submit}>
         <InputGroup className="mb-3">
           <FormControl
