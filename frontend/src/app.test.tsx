@@ -27,3 +27,17 @@ test('page has manage sensor title', () => {
   render(<app.App />);
   expect(screen.getByRole('heading', {name: 'Manage Sensor'})).toBeVisible();
 });
+
+test('metrics URL based on page location', () => {
+  render(<app.MetricsURL />);
+  expect(
+    screen.getByText('http://example.com:8080/metrics')
+  ).toBeInTheDocument();
+});
+
+test('metrics URL is a link', () => {
+  render(<app.MetricsURL />);
+  expect(screen.getByText('http://example.com:8080/metrics')).toBeInstanceOf(
+    HTMLAnchorElement
+  );
+});

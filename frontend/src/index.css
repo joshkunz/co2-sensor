@@ -13,9 +13,13 @@
     font-family: monospace;
 }
 
-.metrics_url_label {
+.metrics-url-label {
     margin-right: 1ex;
     font-style: italic;
+}
+
+.metrics-url {
+    font-family: monospace;
 }
 
 .status-icon {
