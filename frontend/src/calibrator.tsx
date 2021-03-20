@@ -1,4 +1,4 @@
-import React, {FormEvent} from 'react';
+import React, {FormEvent, useEffect, useState} from 'react';
 import Card from 'react-bootstrap/Card';
 import Button from 'react-bootstrap/Button';
 import Accordion from 'react-bootstrap/Accordion';
@@ -8,11 +8,12 @@ import Form from 'react-bootstrap/Form';
 import InputGroup from 'react-bootstrap/InputGroup';
 import FormControl from 'react-bootstrap/FormControl';
 import axios from 'axios';
-import {CancelTokenSource as AxiosCancelTokenSource} from 'axios';
+import * as xstate from 'xstate';
+import {useMachine} from '@xstate/react';
 
 function calibrationFinished(): [Promise<undefined>, () => void] {
-  let resolver: (v?: any) => any;
-  let rejector: (r?: any) => any;
+  let resolver: (v?: undefined) => void;
+  let rejector: (r?: undefined) => void;
   let p: Promise<undefined> = new Promise((resolve, reject) => {
     resolver = resolve;
     rejector = reject;
@@ -115,8 +116,8 @@ enum OperationButtonOp {
 type OperationButtonProps = {
   operation: OperationButtonOp;
   disabled?: boolean;
-  onCalibrate?: () => any;
-  onCancel?: () => any;
+  onCalibrate?: () => void;
+  onCancel?: () => void;
 };
 
 function OperationButton(props: OperationButtonProps) {
@@ -142,152 +143,154 @@ function OperationButton(props: OperationButtonProps) {
   );
 }
 
-type WizardState = {
-  step: WizardStep;
-  open: boolean;
-};
+// State machine representing the calibration workflow.
+const calibrationMachine = xstate.Machine({
+  id: 'calibration',
+  initial: 'closed',
+  states: {
+    closed: {
+      on: {
+        OPEN: 'go_outside',
+      },
+    },
+    go_outside: {
+      on: {
+        START: 'calibration_in_progress',
+        CLOSE: 'closed',
+      },
+    },
+    calibration_in_progress: {
+      on: {
+        DONE: 'calibration_successful',
+      },
+    },
+    calibration_successful: {
+      on: {
+        CLOSE: 'closed',
+      },
+    },
+  },
+});
 
 type WizardProps = {
+  // The amount of time to wait before closing the calibration box after
+  // calibration completes.
   closeAfterCalibrationMs?: number;
 };
 
-enum WizardStep {
-  BeforeCalibrate,
-  GoOutside,
-  CalibrationInProgress,
-  CalibrationSuccessful,
-}
+function Wizard(props: WizardProps) {
+  const onUnmountOnlyFilter: [] = [];
+  const [state, send] = useMachine(calibrationMachine);
+  const [isOpen, setOpen] = useState(false);
 
-class Wizard extends React.Component<WizardProps, WizardState> {
-  state: WizardState;
-  signal: AxiosCancelTokenSource;
-  calibrationCancel?: () => void;
-  closeTimer?: any = undefined;
-
-  constructor(props: WizardProps) {
-    super(props);
-
-    this.state = {
-      step: WizardStep.BeforeCalibrate,
-      open: false,
+  // General unmount to cancel any pending requests.
+  const signal = axios.CancelToken.source();
+  useEffect(() => {
+    return () => {
+      signal.cancel('component unmounting');
     };
+  }, onUnmountOnlyFilter);
 
-    this.signal = axios.CancelToken.source();
-
-    this.calibrate = this.calibrate.bind(this);
-    this.cancel = this.cancel.bind(this);
-    this.start = this.start.bind(this);
-    this.reset = this.reset.bind(this);
-  }
-
-  componentDidMount() {
-    this.signal = axios.CancelToken.source();
-  }
-
-  componentWillUnmount() {
-    this.signal.cancel('component unmounting');
-    if (this.calibrationCancel !== undefined) {
-      this.calibrationCancel();
-      this.calibrationCancel = undefined;
+  // Once we are in the pending state, start polling for calibration to be
+  // complete.
+  useEffect(() => {
+    if (state.value !== 'calibration_in_progress') {
+      return undefined;
     }
-    if (this.closeTimer !== undefined) {
-      clearTimeout(this.closeTimer);
-    }
-  }
 
-  calibrate() {
-    this.setState({
-      step: WizardStep.GoOutside,
-      open: true,
-    });
-  }
-
-  cancel() {
-    this.setState({
-      step: WizardStep.BeforeCalibrate,
-      open: false,
-    });
-  }
-
-  reset() {
-    this.setState({step: WizardStep.BeforeCalibrate});
-  }
-
-  async start() {
-    // TODO: Correctly handle a failed calibration message.
-    await axios.put(
-      '/calibrate',
-      {},
-      {
-        cancelToken: this.signal.token,
-      }
-    );
-    this.setState({step: WizardStep.CalibrationInProgress});
+    // Fire of a background task to wait for the calibration to finish,
+    // cancel it on unmount/state change.
     const [ready, cancel] = calibrationFinished();
-    this.calibrationCancel = cancel;
-    await ready;
-    this.setState({step: WizardStep.CalibrationSuccessful});
+    (async () => {
+      await ready;
+      send('DONE');
+    })();
+
+    return () => {
+      cancel;
+    };
+  }, [state]);
+
+  // Once we are in the `calibration_successful` state, close the component
+  // after the user has had a moment to read the success message.
+  useEffect(() => {
+    if (state.value !== 'calibration_successful') {
+      return undefined;
+    }
 
     let closeAfterCalibrationMs = 1500;
-    if (this.props.closeAfterCalibrationMs !== undefined) {
-      closeAfterCalibrationMs = this.props.closeAfterCalibrationMs;
+    if (props.closeAfterCalibrationMs !== undefined) {
+      closeAfterCalibrationMs = props.closeAfterCalibrationMs;
     }
-    this.closeTimer = setTimeout(() => {
-      this.closeTimer = undefined;
-      this.setState({open: false});
+    const closer = setTimeout(() => {
+      setOpen(false);
     }, closeAfterCalibrationMs);
+    return () => {
+      clearTimeout(closer);
+    };
+  }, [state]);
+
+  const open = () => {
+    send('OPEN');
+    setOpen(true);
+  };
+
+  const cancel = () => {
+    send('CLOSE');
+    setOpen(false);
+  };
+
+  const start = async () => {
+    // TODO: Correctly handle a failed calibration message.
+    await axios.put('/calibrate', {}, {cancelToken: signal.token});
+    send('START');
+  };
+
+  const reset = () => {
+    send('CLOSE');
+  };
+
+  const calibrationPending = ['closed', 'go_outside'].some(state.matches);
+
+  let body: JSX.Element | null = null;
+
+  if (calibrationPending) {
+    body = <CalibrationGoOutside onStart={start} />;
+  } else {
+    body = (
+      <Calibrating successful={state.value === 'calibration_successful'} />
+    );
   }
 
-  stepIs(want: WizardStep): boolean {
-    return this.state.step === want;
-  }
-
-  render() {
-    const calibrationPending =
-      this.stepIs(WizardStep.BeforeCalibrate) ||
-      this.stepIs(WizardStep.GoOutside);
-
-    let body: JSX.Element | null = null;
-
-    if (calibrationPending) {
-      body = <CalibrationGoOutside onStart={this.start} />;
-    } else {
-      body = (
-        <Calibrating
-          successful={this.state.step === WizardStep.CalibrationSuccessful}
-        />
-      );
-    }
-
-    const headerButtonVariant = this.stepIs(WizardStep.BeforeCalibrate)
+  const headerButtonVariant =
+    state.value === 'closed'
       ? OperationButtonOp.Calibrate
       : OperationButtonOp.Cancel;
 
-    return (
-      <Accordion>
-        <Card>
-          <Card.Header>
-            <OperationButton
-              operation={headerButtonVariant}
-              onCalibrate={this.calibrate}
-              onCancel={this.cancel}
-              disabled={!calibrationPending}
-            />
-          </Card.Header>
-          <Collapse in={this.state.open} onExited={this.reset}>
-            {/* This div is needed to ensure the collapse/expand
-             * animation is smooth. Docs say elements with
-             * margin/padding can interfere with the animation */}
-            <div>
-              <Card.Body role="region" aria-label="Calibration Wizard">
-                {body}
-              </Card.Body>
-            </div>
-          </Collapse>
-        </Card>
-      </Accordion>
-    );
-  }
+  return (
+    <Accordion>
+      <Card>
+        <Card.Header>
+          <OperationButton
+            operation={headerButtonVariant}
+            onCalibrate={open}
+            onCancel={cancel}
+            disabled={!calibrationPending}
+          />
+        </Card.Header>
+        <Collapse in={isOpen} onExited={reset}>
+          {/* This div is needed to ensure the collapse/expand
+           * animation is smooth. Docs say elements with
+           * margin/padding can interfere with the animation */}
+          <div>
+            <Card.Body role="region" aria-label="Calibration Wizard">
+              {body}
+            </Card.Body>
+          </div>
+        </Collapse>
+      </Card>
+    </Accordion>
+  );
 }
 
-export {Wizard, WizardStep};
+export {Wizard};
