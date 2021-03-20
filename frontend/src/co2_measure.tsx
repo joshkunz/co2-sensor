@@ -5,7 +5,7 @@ import axios from 'axios';
 const READING_POLLING_INTERVAL_MS = 1000;
 
 function useCO2Poller(onReading: (reading: number) => void) {
-  const onlyOnUnmountFilter: any[] = [];
+  const onlyOnUnmountFilter: [] = [];
   useEffect(() => {
     const signal = axios.CancelToken.source();
     const poller = setInterval(async () => {
@@ -33,21 +33,15 @@ function Reading() {
     setLastReading(r);
   });
 
-  let concentration = <span>loading...</span>;
-  if (last_reading !== undefined) {
-    concentration = (
-      <>
-        <span className="co2_measurement">{last_reading}</span>
-        <span className="co2_units">ppm</span>
-      </>
-    );
-  }
   return (
-    <div className="co2_box">
+    <div className="co2-box">
       <Badge variant="dark">
         CO<sub>2</sub>
       </Badge>
-      {concentration}
+      <span className="co2-measurement">
+        {last_reading === undefined ? 'loading...' : last_reading}
+      </span>
+      {last_reading !== undefined && <span className="co2-units">ppm</span>}
     </div>
   );
 }
