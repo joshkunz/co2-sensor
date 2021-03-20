@@ -1,9 +1,12 @@
-import React from 'react';
+import React, {FormEvent} from 'react';
 import Card from 'react-bootstrap/Card';
 import Button from 'react-bootstrap/Button';
 import Accordion from 'react-bootstrap/Accordion';
 import Spinner from 'react-bootstrap/Spinner';
 import Collapse from 'react-bootstrap/Collapse';
+import Form from 'react-bootstrap/Form';
+import InputGroup from 'react-bootstrap/InputGroup';
+import FormControl from 'react-bootstrap/FormControl';
 import axios from 'axios';
 import {CancelTokenSource as AxiosCancelTokenSource} from 'axios';
 
@@ -38,6 +41,12 @@ function calibrationFinished(): [Promise<undefined>, () => void] {
 }
 
 function CalibrationGoOutside(props: {onStart: () => void}) {
+  // Special handler that cancels the default form submit (reloading the page)
+  // when the user types <Enter> in the form.
+  const handleSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    props.onStart();
+  };
   return (
     <>
       <Card.Title>Go Outside</Card.Title>
@@ -46,9 +55,22 @@ function CalibrationGoOutside(props: {onStart: () => void}) {
         This well-known concentration will be used as a reference to calibrate
         the sensor. Click next once the device is outdoors.
       </Card.Text>
-      <Button variant="primary" onClick={props.onStart}>
-        Start
-      </Button>
+      <Form onSubmit={handleSubmit} inline>
+        <InputGroup className="mb-3 mr-3">
+          <FormControl
+            id="elevation-value"
+            aria-label="Elevation"
+            aria-describedby="elevation-units"
+            placeholder="Elevation"
+          />
+          <InputGroup.Append>
+            <InputGroup.Text id="elevation-units">ft</InputGroup.Text>
+          </InputGroup.Append>
+        </InputGroup>
+        <Button className="mb-3" variant="primary" onClick={props.onStart}>
+          Set and Start
+        </Button>
+      </Form>
     </>
   );
 }

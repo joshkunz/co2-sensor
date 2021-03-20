@@ -36,10 +36,9 @@ test('wizard calibrate button opens dialog', () => {
     screen.getByRole('region', {name: 'Calibration Wizard'})
   ).toBeVisible();
 
-  expect(screen.getByRole('button', {name: 'Start'})).toBeVisible();
-
-  // Include a prompt for the user go outside before starting the calibration.
-  expect(screen.getByText('Go Outside')).toBeVisible();
+  expect(screen.getByRole('textbox', {name: 'Elevation'})).toBeVisible();
+  expect(screen.getByText('ft')).toBeVisible();
+  expect(screen.getByRole('button', {name: 'Set and Start'})).toBeVisible();
 });
 
 test('wizard successfull calibration', async () => {
@@ -63,7 +62,7 @@ test('wizard successfull calibration', async () => {
   userEvent.click(screen.getByRole('button', {name: 'Calibrate'}));
 
   // Click "Start" to start the calibration.
-  userEvent.click(screen.getByRole('button', {name: 'Start'}));
+  userEvent.click(screen.getByRole('button', {name: 'Set and Start'}));
 
   // Wait for the calibration flow to be started, and the "Calibrating..."
   // response to appear.
@@ -78,7 +77,9 @@ test('wizard successfull calibration', async () => {
 
   // Assert that the previous content is removed.
   expect(screen.queryByText('Go Outside')).not.toBeInTheDocument();
-  expect(screen.queryByRole('button', {name: 'Start'})).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole('button', {name: 'Set and Start'})
+  ).not.toBeInTheDocument();
 
   // And our cancel button should be disabled.
   expect(screen.getByRole('button', {name: 'Cancel'})).toBeDisabled();
