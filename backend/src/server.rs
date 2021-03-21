@@ -32,8 +32,23 @@ const MAX_MEASURE_RATE: time::Duration = time::Duration::from_secs(15);
 #[derive(Debug)]
 pub struct Error(String);
 
+impl Error {
+    fn to_response(self) -> http::Response<hyper::Body> {
+        return http::response::Builder::default()
+            .status(http::StatusCode::INTERNAL_SERVER_ERROR)
+            .body(hyper::Body::from(self.0))
+            .unwrap();
+    }
+}
+
 impl From<&str> for Error {
     fn from(e: &str) -> Error {
+        return Error(e.to_string());
+    }
+}
+
+impl From<String> for Error {
+    fn from(e: String) -> Error {
         return Error(e.to_string());
     }
 }
@@ -71,6 +86,7 @@ pub trait Device {
         reference: wire::Concentration,
         sleep_fn: T,
     ) -> Result<()>;
+    fn read_elevation(&mut self) -> Result<wire::Distance>;
 }
 
 impl<D: device::Device> Device for D {
@@ -85,10 +101,15 @@ impl<D: device::Device> Device for D {
     ) -> Result<()> {
         return self.calibrate_co2(reference, sleep_fn).map_err(Error::from);
     }
+
+    fn read_elevation(&mut self) -> Result<wire::Distance> {
+        return self.read_elevation().map_err(Error::from);
+    }
 }
 
 pub trait Manager {
     fn measure(&self) -> Result<wire::Concentration>;
+    fn elevation(&self) -> Result<wire::Distance>;
     fn calibrate(&self) -> ();
     fn is_ready(&self) -> bool;
 }
@@ -184,6 +205,10 @@ where
         calibration_in_progress.recv().unwrap();
         return;
     }
+
+    fn elevation(&self) -> Result<wire::Distance> {
+        return self.maybe_lock_device()?.read_elevation();
+    }
 }
 
 pub struct Server<M> {
@@ -263,7 +288,6 @@ impl<M> Server<M> {
         };
     }
 }
-
 fn json_response<J: serde::Serialize>(value: &J) -> http::Response<hyper::Body> {
     let builder = http::response::Builder::default();
     let maybe_resp = match serde_json::to_vec(value) {
@@ -271,14 +295,11 @@ fn json_response<J: serde::Serialize>(value: &J) -> http::Response<hyper::Body> 
             .status(200)
             .header("Content-Type", mime::APPLICATION_JSON.to_string())
             .body(hyper::Body::from(enc)),
-        Err(err) => builder.status(500).body(hyper::Body::from(err.to_string())),
+        Err(err) => return Error::from(err.to_string()).to_response(),
     };
     return match maybe_resp {
         Ok(r) => r,
-        Err(e) => http::response::Builder::default()
-            .status(500)
-            .body(hyper::Body::from(e.to_string()))
-            .unwrap(),
+        Err(e) => Error::from(e.to_string()).to_response(),
     };
 }
 
@@ -292,14 +313,7 @@ impl<M: Manager + Clone + Send + Sync + 'static + RefUnwindSafe> Server<M> {
         let srv = Self::take_from(&mut state);
         match srv.manager.measure() {
             Ok(c) => srv.co2_metric.set(c.ppm() as f64),
-            Err(e) => {
-                println!("measure err :( {:?}", e);
-                let resp = gotham_response::create_empty_response(
-                    &state,
-                    http::StatusCode::INTERNAL_SERVER_ERROR,
-                );
-                return (state, resp);
-            }
+            Err(e) => return (state, e.to_response()),
         };
 
         let enc = prometheus::TextEncoder::new();
@@ -308,13 +322,7 @@ impl<M: Manager + Clone + Send + Sync + 'static + RefUnwindSafe> Server<M> {
         let registry = srv.registry.lock().unwrap();
 
         if let Err(e) = enc.encode(&registry.gather(), &mut out) {
-            let resp = gotham_response::create_response(
-                &state,
-                http::StatusCode::INTERNAL_SERVER_ERROR,
-                mime::TEXT_PLAIN,
-                e.to_string(),
-            );
-            return (state, resp);
+            return (state, Error::from(e.to_string()).to_response());
         }
         let resp =
             gotham_response::create_response(&state, http::StatusCode::OK, mime::TEXT_PLAIN, out);
@@ -340,15 +348,15 @@ impl<M: Manager + Clone + Send + Sync + 'static + RefUnwindSafe> Server<M> {
         let srv = Self::borrow_from(&state);
         return match srv.manager.measure() {
             Ok(concentration) => (state, json_response(&concentration.ppm())),
-            Err(e) => {
-                let resp = gotham_response::create_response(
-                    &state,
-                    http::StatusCode::INTERNAL_SERVER_ERROR,
-                    mime::TEXT_PLAIN,
-                    e.to_string(),
-                );
-                (state, resp)
-            }
+            Err(e) => (state, e.to_response()),
+        };
+    }
+
+    fn render_elevation(state: GothamState) -> (GothamState, http::Response<hyper::Body>) {
+        let srv = Self::borrow_from(&state);
+        return match srv.manager.elevation() {
+            Ok(d) => (state, json_response(&d.feet())),
+            Err(e) => (state, e.to_response()),
         };
     }
 
@@ -364,6 +372,7 @@ impl<M: Manager + Clone + Send + Sync + 'static + RefUnwindSafe> Server<M> {
             route.get("/co2").to(Self::render_co2);
             route.get("/isready").to(Self::render_is_ready);
             route.put("/calibrate").to(Self::render_put_calibrate);
+            route.get("/elevation").to(Self::render_elevation);
 
             if !self.static_dir.is_empty() {
                 route.get("/").to_dir(self.static_dir.clone());
@@ -381,6 +390,7 @@ mod tests {
     struct _FakeDeviceData {
         co2: Option<wire::Concentration>,
         reference: Option<wire::Concentration>,
+        elevation: Option<wire::Distance>,
         calibrate_called_signal: Option<sync::mpsc::Sender<()>>,
         calibrate_wait_signal: Option<sync::mpsc::Receiver<()>>,
     }
@@ -414,6 +424,14 @@ mod tests {
             }
             return Err(Error::from("not implemented"));
         }
+
+        fn read_elevation(&mut self) -> Result<wire::Distance> {
+            let data = self.data.lock().unwrap();
+            return match data.elevation {
+                Some(d) => Ok(d),
+                None => Err(Error::from("no elevation set on fake")),
+            };
+        }
     }
 
     impl FakeDevice {
@@ -436,6 +454,11 @@ mod tests {
     impl FakeBuilder {
         fn with_co2(mut self, c: wire::Concentration) -> Self {
             self.data.co2 = Option::from(c);
+            return self;
+        }
+
+        fn with_elevation(mut self, d: wire::Distance) -> Self {
+            self.data.elevation = Option::from(d);
             return self;
         }
 
@@ -484,6 +507,17 @@ mod tests {
         assert_eq!(mgr.measure().unwrap(), wire::Concentration::PPM(55));
     }
 
+    fn read_json<T: serde::de::DeserializeOwned>(r: gotham::test::TestResponse) -> Result<T> {
+        let body = match r.read_utf8_body() {
+            Ok(v) => v,
+            Err(e) => return Err(Error::from(e.to_string())),
+        };
+        return match serde_json::from_str(&body) {
+            Ok(v) => Ok(v),
+            Err(e) => Err(Error::from(e.to_string())),
+        };
+    }
+
     #[test]
     fn test_metrics() {
         // Arrange.
@@ -503,7 +537,6 @@ mod tests {
 
         assert_eq!(reply.status(), 200);
         let body = reply.read_utf8_body().unwrap();
-        println!("body:\n{}", body);
         assert!(body.contains("co2_ppm 100"));
     }
 
@@ -564,7 +597,7 @@ mod tests {
             assert_eq!(reply.status(), 200);
 
             // Should return a json-encoded bool saying that we're ready.
-            return serde_json::from_str(&reply.read_utf8_body().unwrap()).unwrap();
+            return read_json(reply).unwrap();
         };
 
         // No calibrate ongoing, the device should be ready for measurements.
@@ -606,7 +639,29 @@ mod tests {
             .unwrap();
 
         assert_eq!(reply.status(), 200);
-        let measurement: u16 = serde_json::from_str(&reply.read_utf8_body().unwrap()).unwrap();
+        let measurement: u16 = read_json(reply).unwrap();
         assert_eq!(measurement, want_measurement.ppm());
+    }
+
+    #[test]
+    fn test_read_elevation() {
+        let want_elevation = wire::Distance::Feet(1500);
+        let fake = FakeBuilder::default()
+            .with_elevation(want_elevation)
+            .build();
+        let mut builder = Builder::default();
+        builder.device(fake.clone());
+        let srv = builder.build().unwrap();
+
+        let test_server = TestServer::new(srv.routes()).unwrap();
+        let reply = test_server
+            .client()
+            .get("http://localhost/elevation")
+            .perform()
+            .unwrap();
+
+        assert_eq!(reply.status(), 200);
+        let elevation: u16 = read_json(reply).unwrap();
+        assert_eq!(elevation, want_elevation.feet());
     }
 }
