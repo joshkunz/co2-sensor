@@ -104,21 +104,21 @@ pub trait Device {
     fn wait_status<P, T>(&mut self, pred: P, sleep_fn: T) -> Result<()>
     where
         P: Fn(wire::response::Status) -> bool,
-        T: Fn(time::Duration),
+        T: Fn(),
     {
         loop {
             let r: wire::response::Status = self.execute(wire::command::Status)?;
             if pred(r) {
                 return Ok(());
             }
-            sleep_fn(time::Duration::from_secs(5));
+            sleep_fn();
         }
     }
 
     /// Wait for the device to finish warmup. Should be called before
     /// taking co2 measurements. `sleep_fn` is called between polling cycles.
     fn wait_warmup<T: Fn(time::Duration)>(&mut self, sleep_fn: T) -> Result<()> {
-        return self.wait_status(|s| !s.in_warmup(), sleep_fn);
+        return self.wait_status(|s| !s.in_warmup(), || sleep_fn(time::Duration::from_secs(5)));
     }
 
     /// Calibrate the device's co2 readings to a reference concentration.
@@ -128,12 +128,6 @@ pub trait Device {
         reference: wire::Concentration,
         sleep_fn: T,
     ) -> Result<()> {
-        self.execute_ack(wire::command::StartSinglePointCalibration)?;
-        // Wait at least one DSP before checking that we've entered calibration
-        // mode.
-        sleep_fn(time::Duration::from_secs(30));
-        // Wait for the device to enter calibration mode.
-        self.wait_status(|s| s.in_calibration(), &sleep_fn)?;
         self.execute_ack(wire::command::SetSinglePointPPM(reference))?;
         let got: wire::response::GasPPM =
             self.execute(wire::command::VerifySinglePointCalibration)?;
@@ -143,8 +137,12 @@ pub trait Device {
                 got, reference
             )));
         }
-        // Wait for the device to exit calibration mode.
-        self.wait_status(|s| !s.in_calibration(), &sleep_fn)?;
+        // Start the actual calibration.
+        self.execute_ack(wire::command::StartSinglePointCalibration)?;
+        // Wait for the device to enter calibration mode, polling every 5s.
+        self.wait_status(|s| s.in_calibration(), || sleep_fn(time::Duration::from_secs(5)))?;
+        // Wait for the device to exit calibration mode, polling every 15s.
+        self.wait_status(|s| !s.in_calibration(), || sleep_fn(time::Duration::from_secs(15)))?;
         return Ok(());
     }
 }
@@ -226,7 +224,7 @@ mod tests {
         in_warmup: sync::Arc<atomic::AtomicBool>,
         status_notify: Option<mpsc::Sender<()>>,
         reference: wire::Concentration,
-        in_calibration: bool,
+        in_calibration: sync::Arc<atomic::AtomicBool>,
     }
 
     impl Default for Fake {
@@ -237,7 +235,7 @@ mod tests {
                 in_warmup: sync::Arc::new(atomic::AtomicBool::new(false)),
                 status_notify: None,
                 reference: wire::Concentration::PPM(0),
-                in_calibration: false,
+                in_calibration: sync::Arc::new(atomic::AtomicBool::new(false)),
             };
         }
     }
@@ -278,7 +276,7 @@ mod tests {
             } else if p == wire::Payload::from(wire::command::Status) {
                 let mut flags = wire::response::StatusFlags::default();
                 flags.in_warmup = self.in_warmup.load(atomic::Ordering::SeqCst);
-                flags.in_calibration = self.in_calibration;
+                flags.in_calibration = self.in_calibration.load(atomic::Ordering::SeqCst);
                 r = wire::response::Status::from(flags).into();
                 if let Some(notify) = &self.status_notify {
                     let _r = notify.send(());
@@ -288,14 +286,13 @@ mod tests {
                 self.elevation = d;
                 r = wire::Payload::from(wire::response::Ack);
             } else if p == wire::Payload::from(wire::command::StartSinglePointCalibration) {
-                self.in_calibration = true;
+                self.in_calibration.store(true, atomic::Ordering::SeqCst);
                 r = wire::Payload::from(wire::response::Ack);
             } else if let Ok(ssp) = wire::command::SetSinglePointPPM::try_from(p.clone()) {
                 let wire::command::SetSinglePointPPM(c) = ssp;
                 self.reference = c;
                 r = wire::response::Ack.into();
             } else if let Ok(_) = wire::command::VerifySinglePointCalibration::try_from(p.clone()) {
-                self.in_calibration = false;
                 r = wire::response::GasPPM::with_ppm(self.reference.ppm()).into();
             } else {
                 return Err(Error::from(format!("fake not implemented: {:?}", p)));
@@ -394,13 +391,21 @@ mod tests {
     #[test]
     fn test_calibrate_co2() {
         let mut f = Fake::default();
-
+        let in_calibration = sync::Arc::new(atomic::AtomicBool::from(false));
+        f.in_calibration = in_calibration.clone();
         assert_eq!(f.reference, wire::Concentration::PPM(0));
 
         let (calibrated_tx, calibrated_rx) = mpsc::channel();
-
         thread::spawn(move || {
-            f.calibrate_co2(wire::Concentration::PPM(400), |_d| {})
+            let sleep_fn = move |_d| {
+                // The fake device automatically goes into calibration once the
+                // calibration starts, so this will only be called once the
+                // device starts waiting for calibration to be complete. When
+                // that happens, we just automatically move it out of
+                // calibration mode.
+                in_calibration.store(false, atomic::Ordering::SeqCst);
+            };
+            f.calibrate_co2(wire::Concentration::PPM(400), sleep_fn)
                 .unwrap();
             calibrated_tx.send(f).unwrap();
         });
