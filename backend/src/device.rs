@@ -118,7 +118,10 @@ pub trait Device {
     /// Wait for the device to finish warmup. Should be called before
     /// taking co2 measurements. `sleep_fn` is called between polling cycles.
     fn wait_warmup<T: Fn(time::Duration)>(&mut self, sleep_fn: T) -> Result<()> {
-        return self.wait_status(|s| !s.in_warmup(), || sleep_fn(time::Duration::from_secs(5)));
+        return self.wait_status(
+            |s| !s.in_warmup(),
+            || sleep_fn(time::Duration::from_secs(5)),
+        );
     }
 
     /// Calibrate the device's co2 readings to a reference concentration.
@@ -140,13 +143,28 @@ pub trait Device {
         // Start the actual calibration.
         self.execute_ack(wire::command::StartSinglePointCalibration)?;
         // Wait for the device to enter calibration mode, polling every 5s.
-        self.wait_status(|s| s.in_calibration(), || sleep_fn(time::Duration::from_secs(5)))?;
+        self.wait_status(
+            |s| s.in_calibration(),
+            || sleep_fn(time::Duration::from_secs(5)),
+        )?;
         // Wait for the device to exit calibration mode, polling every 15s.
-        self.wait_status(|s| !s.in_calibration(), || sleep_fn(time::Duration::from_secs(15)))?;
+        self.wait_status(
+            |s| !s.in_calibration(),
+            || sleep_fn(time::Duration::from_secs(15)),
+        )?;
 
         let status: wire::response::Status = self.execute(wire::command::Status)?;
         if !status.is_normal() {
             return Err(Error::from(format!("Unexpected status: {}", status)));
+        }
+        return Ok(());
+    }
+
+    fn disable_abc(&mut self) -> Result<()> {
+        let r: wire::response::ABCState =
+            self.execute(wire::command::SetABCLogic(wire::Toggle::Off))?;
+        if r != wire::response::ABCState::Off {
+            return Err(Error::from("ABC state failed toggle off."));
         }
         return Ok(());
     }

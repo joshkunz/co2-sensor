@@ -1,9 +1,9 @@
 use std::array;
 use std::convert::{TryFrom, TryInto};
+use std::fmt;
 use std::ops::Deref;
 use std::result;
 use std::string;
-use std::fmt;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Payload(pub Vec<u8>);
@@ -544,6 +544,12 @@ pub mod response {
     #[derive(Debug, PartialEq)]
     pub struct SerialNumber(String);
 
+    impl fmt::Display for SerialNumber {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> result::Result<(), fmt::Error> {
+            self.0.fmt(f)
+        }
+    }
+
     impl TryFrom<Payload> for SerialNumber {
         type Error = ParseError;
 
@@ -559,6 +565,12 @@ pub mod response {
     #[derive(Debug, PartialEq)]
     pub struct CompileSubvol(String);
 
+    impl fmt::Display for CompileSubvol {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> result::Result<(), fmt::Error> {
+            self.0.fmt(f)
+        }
+    }
+
     impl TryFrom<Payload> for CompileSubvol {
         type Error = ParseError;
 
@@ -572,6 +584,12 @@ pub mod response {
 
     #[derive(Debug, PartialEq)]
     pub struct CompileDate(pub chrono::NaiveDate);
+
+    impl fmt::Display for CompileDate {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> result::Result<(), fmt::Error> {
+            self.0.fmt(f)
+        }
+    }
 
     impl TryFrom<Payload> for CompileDate {
         type Error = ParseError;
@@ -656,7 +674,9 @@ pub mod response {
     impl fmt::Display for Status {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> result::Result<(), fmt::Error> {
             let maybe_letter = |b, l| if b { l } else { "." };
-            write!(f, "Status({}{}{}{}{})",
+            write!(
+                f,
+                "Status({}{}{}{}{})",
                 maybe_letter(self.is_err(), "E"),
                 maybe_letter(self.in_warmup(), "W"),
                 maybe_letter(self.in_calibration(), "C"),
