@@ -27,6 +27,6 @@ fn main() {
     server_builder.static_dir(static_dir);
     let server = server_builder.build().expect("failed to build server");
 
-    //println!("Serving on 0.0.0.0:80");
+    println!("Serving on 0.0.0.0:80");
     gotham::start((net::Ipv4Addr::new(0, 0, 0, 0), 80), server.routes());
 }

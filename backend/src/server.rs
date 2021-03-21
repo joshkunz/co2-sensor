@@ -423,7 +423,7 @@ impl<M: Manager + Clone + Send + Sync + 'static + RefUnwindSafe> Server<M> {
             route.put("/elevation").to_async(Self::render_put_elevation);
 
             if !self.static_dir.is_empty() {
-                route.get("/").to_dir(self.static_dir.clone());
+                route.get("/*").to_dir(self.static_dir.clone());
             }
         });
     }
