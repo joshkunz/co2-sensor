@@ -4,10 +4,12 @@ use gotham::hyper;
 use gotham::router::builder::*;
 use governor;
 use http;
+use log::{error, info};
 use mime;
 use prometheus;
 use prometheus::Encoder;
 use serde;
+use std::fmt;
 use std::io;
 use std::panic::RefUnwindSafe;
 use std::result;
@@ -45,6 +47,12 @@ impl Error {
     }
 }
 
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> result::Result<(), fmt::Error> {
+        return self.0.fmt(f);
+    }
+}
+
 impl From<&str> for Error {
     fn from(e: &str) -> Error {
         return Error(e.to_string());
@@ -72,12 +80,6 @@ impl From<device::Error> for Error {
 impl From<sync::mpsc::RecvError> for Error {
     fn from(e: sync::mpsc::RecvError) -> Error {
         return Error(e.to_string());
-    }
-}
-
-impl ToString for Error {
-    fn to_string(&self) -> String {
-        return self.0.clone();
     }
 }
 
@@ -208,9 +210,11 @@ where
         thread::spawn(move || {
             let mut dev = mgr.device.lock().unwrap();
             calibration_started.send(()).unwrap();
-            // TODO(jkz): Actually communicate the failure to calibrate
-            // somehow. Logs? Lockup the manager? Callback?
-            let _ = dev.calibrate_co2(AMBIENT_CONCENTRATION, thread::sleep);
+            info!("Starting calibration in the background...");
+            let r = dev.calibrate_co2(AMBIENT_CONCENTRATION, thread::sleep);
+            if let Some(err) = r.err() {
+                error!("Failed to calibrate: {}", err);
+            }
         });
         calibration_in_progress.recv().unwrap();
         return;

@@ -6,6 +6,8 @@ mod server;
 mod wire;
 use device::Device;
 use gotham;
+use log::error;
+use pretty_env_logger;
 use std::default::Default;
 use std::thread;
 
@@ -23,9 +25,11 @@ fn print_device(d: &mut device::T6615) -> device::Result<()> {
 }
 
 fn main() {
+    pretty_env_logger::init();
     let args: Vec<String> = env::args().collect();
     if args.len() != 3 {
-        eprintln!("Must supply <static-dir> <serial-device>");
+        error!("Must supply <static-dir> <serial-device>");
+        process::exit(1);
     }
     let (static_dir, serial_device_path) = (&args[1], &args[2]);
     let mut sensor = device::T6615::new(serial_device_path).expect("unable to connect to sensor");
@@ -39,7 +43,7 @@ fn main() {
         .execute(wire::command::Status)
         .expect("failed to read device status");
     if !status.is_normal() {
-        eprintln!("Error: Abnormal device status on startup: {}", status);
+        error!("Error: Abnormal device status on startup: {}", status);
         process::exit(1);
     }
 
