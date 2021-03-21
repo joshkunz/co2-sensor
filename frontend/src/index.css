@@ -1,21 +1,25 @@
-.co2_box {
+.co2-box {
     font-size: 25pt;
     width: 15rem;
 }
 
-.co2_measurement {
+.co2-measurement {
     margin-left: 0.7ex;
 }
 
-.co2_units {
+.co2-units {
     font-size: 50%;
     font-weight: bold;
     font-family: monospace;
 }
 
-.metrics_url_label {
+.metrics-url-label {
     margin-right: 1ex;
     font-style: italic;
+}
+
+.metrics-url {
+    font-family: monospace;
 }
 
 .status-icon {
@@ -23,4 +27,8 @@
     vertical-align: middle;
     display: inline-block;
     margin-bottom: 2.5pt;
+}
+
+.current-elevation {
+    font-size: 10pt;
 }

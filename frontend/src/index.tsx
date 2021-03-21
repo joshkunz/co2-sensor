@@ -16,12 +16,13 @@ import './index.css';
  * at build time, tsc will not include a require for the mocks. Then we can
  * manually add the require in the development environment.
  *
- * The eslint here works, since this is only a dev dependency for the reasons
- * outlined above.
+ * We disable the eslint here, since this is only a dev dependency for the
+ * reasons outlined above.
  */
 // eslint-disable-next-line node/no-unpublished-import
 import {worker as W} from './mocks/browser';
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 declare function require(moduleName: string): any;
 
 if (process.env.NODE_ENV === 'development') {
