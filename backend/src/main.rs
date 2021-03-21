@@ -1,12 +1,11 @@
 use std::env;
 use std::net;
 use std::process;
-use tokio;
-use warp;
 mod device;
 mod server;
 mod wire;
 use device::Device;
+use gotham;
 use std::default::Default;
 use std::thread;
 
@@ -28,11 +27,6 @@ fn main() {
     server_builder.static_dir(static_dir);
     let server = server_builder.build().expect("failed to build server");
 
-    println!("Serving on 0.0.0.0:80");
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(async {
-        warp::serve(server.routes())
-            .run((net::Ipv4Addr::new(0, 0, 0, 0), 80))
-            .await;
-    });
+    //println!("Serving on 0.0.0.0:80");
+    gotham::start((net::Ipv4Addr::new(0, 0, 0, 0), 80), server.routes());
 }
