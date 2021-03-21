@@ -143,6 +143,11 @@ pub trait Device {
         self.wait_status(|s| s.in_calibration(), || sleep_fn(time::Duration::from_secs(5)))?;
         // Wait for the device to exit calibration mode, polling every 15s.
         self.wait_status(|s| !s.in_calibration(), || sleep_fn(time::Duration::from_secs(15)))?;
+
+        let status: wire::response::Status = self.execute(wire::command::Status)?;
+        if !status.is_normal() {
+            return Err(Error::from(format!("Unexpected status: {}", status)));
+        }
         return Ok(());
     }
 }

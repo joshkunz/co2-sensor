@@ -3,6 +3,7 @@ use std::convert::{TryFrom, TryInto};
 use std::ops::Deref;
 use std::result;
 use std::string;
+use std::fmt;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Payload(pub Vec<u8>);
@@ -649,6 +650,19 @@ pub mod response {
         /// Returns `true` if the device is in a normal state of operation.
         pub fn is_normal(&self) -> bool {
             return self.v == 0;
+        }
+    }
+
+    impl fmt::Display for Status {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> result::Result<(), fmt::Error> {
+            let maybe_letter = |b, l| if b { l } else { "." };
+            write!(f, "Status({}{}{}{}{})",
+                maybe_letter(self.is_err(), "E"),
+                maybe_letter(self.in_warmup(), "W"),
+                maybe_letter(self.in_calibration(), "C"),
+                maybe_letter(self.in_idle(), "I"),
+                maybe_letter(self.in_self_test(), "T"),
+            )
         }
     }
 
