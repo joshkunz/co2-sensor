@@ -89,6 +89,8 @@ test('calibration landing calls onClick on valid elevation', () => {
   userEvent.click(screen.getByRole('button', {name: 'Set and Start'}));
   expect(screen.getByText(/^Must be between/));
   expect(mockStart).toHaveBeenCalled();
+  // Expect the start function to have been called with our given elevation.
+  expect(mockStart.mock.calls[0]).toEqual([1000]);
 });
 
 test('calibration landing shows current elevation', async () => {
@@ -118,6 +120,7 @@ test('calibration landing shows current elevation', async () => {
 });
 
 test('wizard successfull calibration', async () => {
+  let elevation = -1;
   let calibrationStarted = false;
   let isReady = false;
   server.use(
@@ -127,6 +130,19 @@ test('wizard successfull calibration', async () => {
     }),
     msw.rest.get('/isready', (_, res, ctx) => {
       return res(ctx.json(isReady));
+    }),
+    msw.rest.put('/elevation', (req, res, ctx) => {
+      if (typeof req.body !== 'string') {
+        console.log('/elevation body is not string');
+        return res(ctx.status(400));
+      }
+      try {
+        elevation = JSON.parse(req.body);
+      } catch (e) {
+        console.log('/elevation body failed to parse as json', req.body, e);
+        return res(ctx.status(400));
+      }
+      return res(ctx.status(200));
     })
   );
 
@@ -153,6 +169,9 @@ test('wizard successfull calibration', async () => {
   // Make sure that our code called the calibration handler to start
   // calibration.
   expect(calibrationStarted).toBe(true);
+
+  // Make sure that we also set the elevation.
+  expect(elevation).toBe(0);
 
   // Assert that the previous content is removed.
   expect(screen.queryByText('Go Outside')).not.toBeInTheDocument();

@@ -39,9 +39,7 @@
     },
     "preset": "ts-jest",
     "testEnvironment": "jsdom",
-    "testEnvironmentOptions": {
-      "url": "http://example.com:8080/"
-    },
+    "testURL": "http://example.com:8080",
     "modulePathIgnorePatterns": [
       "<rootDir>/dist"
     ]

@@ -41,7 +41,7 @@ function calibrationFinished(): [Promise<undefined>, () => void] {
   return [p, cancel];
 }
 
-function CalibrationLanding(props: {onStart?: () => void}) {
+function CalibrationLanding(props: {onStart?: (elevation: number) => void}) {
   const [validated, setValidated] = useState(false);
   const [configuredElevation, setConfiguredElevation] = useState<
     number | undefined
@@ -71,8 +71,17 @@ function CalibrationLanding(props: {onStart?: () => void}) {
       return;
     }
 
+    const elevationElem = document.getElementById(
+      'elevation-value'
+    ) as HTMLInputElement;
+    console.assert(elevationElem !== null);
+    if (elevationElem === null) {
+      return;
+    }
+    const elevation = elevationElem.valueAsNumber;
+
     if (props.onStart !== undefined) {
-      props.onStart();
+      props.onStart(elevation);
     }
   };
 
@@ -255,7 +264,7 @@ function Wizard(props: WizardProps) {
     })();
 
     return () => {
-      cancel;
+      cancel();
     };
   }, [state]);
 
@@ -288,9 +297,13 @@ function Wizard(props: WizardProps) {
     setOpen(false);
   };
 
-  const start = async () => {
-    // TODO: Correctly handle a failed calibration message.
+  const start = async (elevation: number) => {
+    // TODO: Correctly handle a failed elevation/calibration message.
+    await axios.put('/elevation', JSON.stringify(elevation), {
+      cancelToken: signal.token,
+    });
     await axios.put('/calibrate', {}, {cancelToken: signal.token});
+
     send('START');
   };
 
