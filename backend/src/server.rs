@@ -29,6 +29,10 @@ const AMBIENT_CONCENTRATION: wire::Concentration = wire::Concentration::PPM(410)
 // a random guess.
 const MAX_MEASURE_RATE: time::Duration = time::Duration::from_secs(15);
 
+// The approximate height of Mt. Everest. Used for sanity-checking the
+// given elevation on configureation.
+const MT_EVEREST_HEIGHT: wire::Distance = wire::Distance::Feet(29_000);
+
 #[derive(Debug)]
 pub struct Error(String);
 
@@ -87,6 +91,7 @@ pub trait Device {
         sleep_fn: T,
     ) -> Result<()>;
     fn read_elevation(&mut self) -> Result<wire::Distance>;
+    fn set_elevation(&mut self, to: wire::Distance) -> Result<()>;
 }
 
 impl<D: device::Device> Device for D {
@@ -105,6 +110,10 @@ impl<D: device::Device> Device for D {
     fn read_elevation(&mut self) -> Result<wire::Distance> {
         return self.read_elevation().map_err(Error::from);
     }
+
+    fn set_elevation(&mut self, to: wire::Distance) -> Result<()> {
+        return self.set_elevation(to).map_err(Error::from);
+    }
 }
 
 pub trait Manager {
@@ -112,6 +121,7 @@ pub trait Manager {
     fn elevation(&self) -> Result<wire::Distance>;
     fn calibrate(&self) -> ();
     fn is_ready(&self) -> bool;
+    fn configure_elevation(&self, to: wire::Distance) -> Result<()>;
 }
 
 type RateLimiter<C> =
@@ -208,6 +218,10 @@ where
 
     fn elevation(&self) -> Result<wire::Distance> {
         return self.maybe_lock_device()?.read_elevation();
+    }
+
+    fn configure_elevation(&self, to: wire::Distance) -> Result<()> {
+        return self.maybe_lock_device()?.set_elevation(to);
     }
 }
 
@@ -360,6 +374,39 @@ impl<M: Manager + Clone + Send + Sync + 'static + RefUnwindSafe> Server<M> {
         };
     }
 
+    async fn render_put_elevation(mut state: GothamState) -> gotham::handler::HandlerResult {
+        let body = match hyper::body::to_bytes(hyper::Body::take_from(&mut state)).await {
+            Ok(bytes) => bytes,
+            Err(e) => return Ok((state, Error::from(e.to_string()).to_response())),
+        };
+        let to_configure_raw: u16 = match serde_json::from_slice(&body) {
+            Ok(v) => v,
+            Err(e) => return Ok((state, Error::from(e.to_string()).to_response())),
+        };
+
+        let to_configure = wire::Distance::Feet(to_configure_raw);
+        // TODO(jkz): allow comparison of these types directly.
+        if to_configure.feet() > MT_EVEREST_HEIGHT.feet() {
+            return Ok((
+                state,
+                Error::from(format!(
+                    "height {} ft. does not exist on earth",
+                    to_configure.feet()
+                ))
+                .to_response(),
+            ));
+        }
+
+        let srv = Self::borrow_from(&state);
+        return Ok(match srv.manager.configure_elevation(to_configure) {
+            Ok(_) => {
+                let resp = gotham_response::create_empty_response(&state, http::StatusCode::OK);
+                (state, resp)
+            }
+            Err(e) => (state, e.to_response()),
+        });
+    }
+
     pub fn routes(&self) -> gotham::router::Router {
         let srv: Server<M> = self.clone();
         let srv_middleware = StateMiddleware::new(srv);
@@ -373,6 +420,7 @@ impl<M: Manager + Clone + Send + Sync + 'static + RefUnwindSafe> Server<M> {
             route.get("/isready").to(Self::render_is_ready);
             route.put("/calibrate").to(Self::render_put_calibrate);
             route.get("/elevation").to(Self::render_elevation);
+            route.put("/elevation").to_async(Self::render_put_elevation);
 
             if !self.static_dir.is_empty() {
                 route.get("/").to_dir(self.static_dir.clone());
@@ -422,7 +470,7 @@ mod tests {
             if let Some(chan) = &data.calibrate_wait_signal {
                 chan.recv_timeout(time::Duration::from_secs(30)).unwrap();
             }
-            return Err(Error::from("not implemented"));
+            return Ok(());
         }
 
         fn read_elevation(&mut self) -> Result<wire::Distance> {
@@ -431,6 +479,12 @@ mod tests {
                 Some(d) => Ok(d),
                 None => Err(Error::from("no elevation set on fake")),
             };
+        }
+
+        fn set_elevation(&mut self, to: wire::Distance) -> Result<()> {
+            let mut data = self.data.lock().unwrap();
+            data.elevation = Option::from(to);
+            return Ok(());
         }
     }
 
@@ -443,6 +497,11 @@ mod tests {
         fn reference(&self) -> Option<wire::Concentration> {
             let data = self.data.lock().unwrap();
             return data.reference;
+        }
+
+        fn elevation(&self) -> Option<wire::Distance> {
+            let data = self.data.lock().unwrap();
+            return data.elevation;
         }
     }
 
@@ -663,5 +722,23 @@ mod tests {
         assert_eq!(reply.status(), 200);
         let elevation: u16 = read_json(reply).unwrap();
         assert_eq!(elevation, want_elevation.feet());
+    }
+
+    #[test]
+    fn test_put_elevation() {
+        let fake = FakeBuilder::default().build();
+        let mut builder = Builder::default();
+        builder.device(fake.clone());
+        let srv = builder.build().unwrap();
+
+        let test_server = TestServer::new(srv.routes()).unwrap();
+        let reply = test_server
+            .client()
+            .put("http://localhost/elevation", "500", mime::APPLICATION_JSON)
+            .perform()
+            .unwrap();
+
+        assert_eq!(reply.status(), 200);
+        assert_eq!(fake.elevation(), Some(wire::Distance::Feet(500)));
     }
 }
