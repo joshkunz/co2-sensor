@@ -6,15 +6,11 @@ This repository contains the code for a simple CO2 sensor that exports
 metrics using the [prometheus](https://prometheus.io/) monitoring format, and
 potentially others in the future.
 
-This project is a work-in-progress. TODO:
-
-* Proper configuration and calibration for the sensor.
-
 ## Assembly 
 
 ### Parts
 
-The project is relatively simple, only using 3 parts:
+The hardware is relatively simple, only using 3 parts:
 
 * A [Telaire T6615](https://www.amphenol-sensors.com/en/telaire/co2/525-co2-sensor-modules/319-t6615).
   This may be overkill. A T6613 may also work. I think all Telaire CO2 sensors
@@ -98,10 +94,13 @@ TODO: Write something nicer.
 
 Configuration of the sensor is done through the sensor's web interface. Browse
 to the web interface by going to `http://<your raspberry pi IP>` in your web
-browser of choice. On that page is a "Calibrate" button, when pressed it will
-walk through calibration.
+browser of choice, or `http://raspberrypi.local` (potentially substituting for a
+different hostname if you've changed it). On that page is a "Calibrate" button,
+when pressed it will walk through the calibration process.
 
-TODO: Add elevation calibration.
+NOTE: Calibration currently doesn't signal very will if calibration fails, but
+info will be printed in the server's log if the device fails to calibrate
+correctly, so check there after calibration.
 
 ### Reading Measurements
 
