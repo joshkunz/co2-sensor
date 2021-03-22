@@ -183,7 +183,7 @@ impl T6615 {
                 .parity(serialport::Parity::None)
                 .data_bits(serialport::DataBits::Eight)
                 .stop_bits(serialport::StopBits::One)
-                .timeout(time::Duration::from_secs(1)),
+                .timeout(time::Duration::from_secs(15)),
         )?;
 
         return Ok(T6615 { port: port });
